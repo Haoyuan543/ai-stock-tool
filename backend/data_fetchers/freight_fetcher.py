@@ -198,10 +198,12 @@ def _apply_csv_freshness_guard(data: dict[str, Any], missing: list[str]) -> None
     data["csv_age_days"] = age
     data["csv_max_age_days"] = max_age
     data["csv_stale"] = age is None or age > max_age
+    data["csv_exact_used"] = not data["csv_stale"]
     if not data["csv_stale"]:
         return
     stale_date = data.get("latest_date") or "日期不明"
     _clear_csv_exact_fields(data)
+    data["csv_exact_used"] = False
     data["note"] = (
         data.get("note", "")
         + f" CSV route data date {stale_date} is stale or invalid, so it was not used as exact current freight data."

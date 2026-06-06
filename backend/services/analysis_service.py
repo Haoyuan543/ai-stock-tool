@@ -3905,9 +3905,12 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
                 return "搜尋單點已降級，需交叉確認"
         cache_fields = set(freight.get("cache_filled_fields") or [])
         if route in cache_fields or f"{route}_weekly_change" in cache_fields:
-            return "由快取補齊，請看快取日期"
+            return f"Supabase / 本機快取補齊，資料日 {fmt(freight.get('cache_data_date'))}"
         if freight.get(route) is not None and freight.get(f"{route}_weekly_change") is not None:
-            return "本次取得"
+            if freight.get("csv_exact_used"):
+                source = freight.get("verified_route_source") or "data/scfi_routes.csv"
+                return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}，來源 {source}"
+            return "本次公開資料取得"
         if freight.get(route) is not None or freight.get(f"{route}_weekly_change") is not None:
             return "半套資料，需交叉確認"
         route_intel = (freight_intel.get(route) or {})
