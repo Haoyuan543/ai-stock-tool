@@ -1,5 +1,26 @@
 # Supabase 長期資料庫設定
 
+## 新版航運快取表
+
+如果你已經建立過資料表，這次仍建議到 Supabase 的 SQL Editor 重新執行一次 `database/schema.sql`。
+
+新版 schema 會新增：
+
+```text
+freight_cache
+```
+
+用途是保存「上次成功抓到的 SCFI / 美西 / 美東 / 歐洲線資料」。每日 GitHub Actions 會優先抓最新公開資料；如果公開頁、搜尋或 OCR 當天失敗，才會用這張表補缺口。報告會明確標示快取日期與補齊欄位，不會把快取當成今日即時數字。
+
+需要的 GitHub Secrets 仍是：
+
+```text
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+UPDATE_SUPABASE=true
+SUPABASE_REQUIRED=false
+```
+
 此功能會把每次 GitHub Actions 分析結果保存到 Supabase PostgreSQL，供未來做回測、勝率統計、7 / 30 / 90 天驗證。
 
 ## 1. 建立 Supabase Project

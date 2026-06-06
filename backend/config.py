@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
     brave_search_api_key: str = Field(default="", alias="BRAVE_SEARCH_API_KEY")
     default_ticker: str = Field(default="2603", alias="DEFAULT_TICKER")
-    request_timeout: float = 8.0
+    request_timeout: float = Field(default=20.0, alias="REQUEST_TIMEOUT_SECONDS")
     openai_timeout_seconds: float = Field(default=180.0, alias="OPENAI_TIMEOUT_SECONDS")
     openai_max_output_tokens: int = Field(default=4000, alias="OPENAI_MAX_OUTPUT_TOKENS")
 

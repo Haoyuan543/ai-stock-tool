@@ -32,13 +32,16 @@ def analyze_search_result_screenshots(results: list[dict[str, Any]], max_pages: 
 
     screenshots: list[dict[str, Any]] = []
     missing: list[str] = []
+    settings = get_settings()
+    page_timeout_ms = max(12000, min(45000, int(settings.request_timeout * 1000)))
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1365, "height": 900}, locale="zh-TW")
         for index, row in enumerate(candidates, start=1):
             try:
-                page.goto(row["url"], wait_until="domcontentloaded", timeout=12000)
-                page.wait_for_timeout(1000)
+                page.goto(row["url"], wait_until="domcontentloaded", timeout=page_timeout_ms)
+                page.wait_for_timeout(1500)
                 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
                 path = SCREENSHOT_DIR / f"search_result_{index}.png"
                 page.screenshot(path=str(path), full_page=False)
@@ -82,7 +85,7 @@ def extract_from_screenshots(screenshots: list[dict[str, Any]]) -> dict[str, Any
             "https://api.openai.com/v1/responses",
             headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
             json={"model": settings.openai_model, "input": [{"role": "user", "content": content}], "max_output_tokens": 900},
-            timeout=httpx.Timeout(35.0, connect=10.0, read=35.0, write=10.0, pool=10.0),
+            timeout=httpx.Timeout(settings.openai_timeout_seconds, connect=20.0, read=settings.openai_timeout_seconds, write=20.0, pool=20.0),
         )
         response.raise_for_status()
         text = _extract_output_text(response.json())

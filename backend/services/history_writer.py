@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 from backend.integrations.supabase_client import insert_rows, is_supabase_configured
+from backend.services.freight_cache import write_freight_cache
 
 
 def _env(name: str, default: str = "") -> str:
@@ -98,6 +99,8 @@ def build_market_snapshot_row(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_history_to_supabase(result: dict[str, Any]) -> bool:
+    write_freight_cache(result.get("symbol") or "", ((result.get("market_data") or {}).get("freight") or {}), result.get("timestamp"))
+
     if _env("UPDATE_SUPABASE", "true").lower() not in {"1", "true", "yes"}:
         print("Supabase skipped: UPDATE_SUPABASE is false.")
         return False

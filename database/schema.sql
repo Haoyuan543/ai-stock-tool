@@ -51,6 +51,25 @@ create table if not exists market_snapshots (
   created_at timestamptz default now()
 );
 
+create table if not exists freight_cache (
+  cache_id text primary key,
+  symbol text not null,
+  data_date date,
+  fetched_at timestamptz,
+  scfi_latest numeric,
+  weekly_change numeric,
+  scfi_streak_weeks numeric,
+  us_west numeric,
+  us_west_weekly_change numeric,
+  us_east numeric,
+  us_east_weekly_change numeric,
+  europe numeric,
+  europe_weekly_change numeric,
+  source text,
+  freight_json jsonb,
+  created_at timestamptz default now()
+);
+
 create table if not exists prediction_validations (
   validation_id text primary key,
   prediction_id text,
@@ -68,4 +87,5 @@ create table if not exists prediction_validations (
 
 create index if not exists idx_analysis_runs_symbol_time on analysis_runs(symbol, analysis_time desc);
 create index if not exists idx_market_snapshots_symbol_date on market_snapshots(symbol, price_date desc);
+create index if not exists idx_freight_cache_symbol_date on freight_cache(symbol, data_date desc, fetched_at desc);
 create index if not exists idx_prediction_validations_symbol on prediction_validations(symbol, horizon);

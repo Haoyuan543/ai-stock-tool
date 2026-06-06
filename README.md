@@ -154,6 +154,18 @@ Search-derived data is labeled as inferred context. Exact numeric fields remain 
 
 Playwright/Chromium does not fully replace API tokens. It can read public pages, rendered DOM, tables, public network JSON, and screenshots, but it does not bypass login, paywalls, CAPTCHA, rate limits, or missing public data. API keys remain the most stable option for repeatable daily analysis and future backtests.
 
+## More Stable Freight Fetching
+
+Freight data is now fetched with longer configurable request timeouts and a last-successful cache.
+
+- `REQUEST_TIMEOUT_SECONDS`: default `20`; controls public-page and HTTP fetch timeout.
+- `OPENAI_TIMEOUT_SECONDS`: default `180`; controls OpenAI extraction timeout.
+- `FREIGHT_CACHE_MAX_DAYS`: default `21`; cached freight data older than this is not used.
+
+The system still tries real sources first: official page/OCR, CSV import, public page extraction, RSS/search, and AI extraction. The freight cache is used only after those attempts leave missing fields. When cache is used, the report explicitly shows cache date, cache source, and which fields were filled. Cached data is not treated as real-time freight data.
+
+For Supabase history, rerun `database/schema.sql` after pulling this version. It adds a `freight_cache` table so GitHub Actions can reuse the latest successful route data when a public source is temporarily unavailable.
+
 ## Data Quality Classification
 
 Every `/analyze` response includes `data_quality`:

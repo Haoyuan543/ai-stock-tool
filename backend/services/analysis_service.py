@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -348,7 +349,11 @@ class AnalysisService:
         red_sea = market.get("red_sea_intelligence") or market.get("red_sea") or {}
         regime = market.get("market_regime") or {}
         intl = market.get("international_events") or {}
+        news = market.get("news") or {}
+        news_relevance = market.get("news_relevance") or {}
+        announcements = market.get("announcement_intelligence") or market.get("announcements") or {}
         freshness = payload.get("data_freshness") or {}
+        analysis_time = freshness.get("analysis_time") or payload.get("timestamp")
         scores = (payload.get("local_scores") or {}).get("revised_score") or {}
         truth = payload.get("truthfulness") or {}
 
@@ -378,12 +383,38 @@ class AnalysisService:
                 "stable": "穩定",
                 "improving": "改善",
                 "normalizing": "正常化",
+                "today_material_event": "今日有重大公告",
+                "recent_event_within_7_days": "近 7 日有公告事件",
+                "stale_event_over_14_days": "事件超過 14 日，僅作背景參考",
+                "fetch_failed": "公告抓取失敗，需人工交叉確認",
+                "none": "未偵測到重大公告",
+                "high": "高",
+                "medium": "中",
+                "low": "低",
+                "strong": "強",
+                "moderate": "中等",
+                "weak": "弱",
             }
             return mapping.get(str(value), val(value))
 
         latest_inst = institutional.get("latest") or {}
         flow = institutional.get("flow_sums") or {}
         technical = stock.get("technical") or {}
+        articles = news_relevance.get("articles") or news.get("articles") or []
+        def news_time_key(row: dict[str, Any]) -> datetime:
+            raw = str(row.get("published_at") or "")
+            if not raw:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            try:
+                parsed = parsedate_to_datetime(raw) if "," in raw else datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except Exception:
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        latest_news = max(articles, key=news_time_key, default={})
+        latest_news_time = latest_news.get("published_at") or ""
+        monthly_rows = fundamentals.get("monthly_revenue") or []
+        latest_revenue = monthly_rows[-1] if monthly_rows else {}
         oil = (intl.get("oil_prices") or {})
         wti = oil.get("wti") or {}
         brent = oil.get("brent") or {}
@@ -392,12 +423,39 @@ class AnalysisService:
         for source in sources[:14]:
             name = source.get("name") or source.get("source") or "資料來源"
             url = source.get("url") or ""
-            source_lines.append(f"- {name}{f'：{url}' if url else ''}")
+            as_of = source.get("as_of") or source.get("published_at") or source.get("date") or ""
+            source_lines.append(f"- {name}{f'（資料日：{as_of}）' if as_of else ''}{f'：{url}' if url else ''}")
         if not source_lines:
             source_lines = ["- 本次沒有可列示的資料來源。"]
 
         warnings = [self._user_message(item) for item in payload.get("missing", [])[:12]]
         warning_lines = [f"- {item}" for item in warnings] or ["- 尚無主要資料缺口。"]
+        if freight.get("cache_used"):
+            cache_fields = freight.get("cache_filled_fields") or []
+            cache_field_names = {
+                "scfi_latest": "SCFI 最新值",
+                "weekly_change": "SCFI 週變化",
+                "scfi_streak_weeks": "SCFI 連續週數",
+                "us_west": "美西線",
+                "us_west_weekly_change": "美西線週變化",
+                "us_east": "美東線",
+                "us_east_weekly_change": "美東線週變化",
+                "europe": "歐洲線",
+                "europe_weekly_change": "歐洲線週變化",
+                "red_sea_status": "紅海狀態",
+                "latest_date": "航運資料日期",
+            }
+            readable_cache_fields = [cache_field_names.get(field, field) for field in cache_fields]
+            cache_lines = [
+                "- 快取補齊：是，僅用於本次即時抓取缺漏的欄位，不視為今日即時報價。",
+                f"- 快取補齊欄位：{', '.join(readable_cache_fields) if readable_cache_fields else '資料不明'}",
+                f"- 快取資料日期：{val(freight.get('cache_data_date'))}",
+                f"- 快取建立時間：{val(freight.get('cache_fetched_at'))}",
+                f"- 快取來源：{val(freight.get('cache_source') or 'last_successful_freight_cache')}",
+                f"- 快取提醒：{val(freight.get('cache_note') or '快取只能降低資料缺口，不能取代本次實際抓取。')}",
+            ]
+        else:
+            cache_lines = ["- 快取補齊：否，本次報告以本次抓取與推論資料為主。"]
 
         return f"""
 
@@ -406,13 +464,17 @@ class AnalysisService:
 ## 事實依據摘要
 
 ### 資料新鮮度
-- 分析時間：{val(freshness.get("analysis_time") or payload.get("timestamp"))}
+- 分析時間：{val(analysis_time)}
 - 股價資料日期：{val(freshness.get("price_data_date"))}
 - 是否即時股價：{"是" if freshness.get("is_realtime_price") else "否"}
 - 是否收盤資料：{"是" if freshness.get("is_closing_price") else "否"}
 - 新鮮度提醒：{val(freshness.get("warning"))}
+- 本次資料抓取時間：{val(analysis_time)}
 
 ### 股價與技術面
+- 資料日期：{val(stock.get("latest_date"))}
+- 抓取時間：{val(stock.get("timestamp") or analysis_time)}
+- 主要來源：{val(stock.get("primary_price_source") or stock.get("exchange") or "Yahoo Finance / FinMind")}
 - 收盤 / 最新價：{val(stock.get("close"))}
 - 成交量：{val(stock.get("volume"))}
 - 20 日均線：{val(stock.get("ma20"))}
@@ -423,6 +485,10 @@ class AnalysisService:
 - 20 日壓力：{val(stock.get("resistance_20d"))}
 
 ### 運價與航運景氣
+- 資料日期：{val(freight.get("latest_date"))}
+- 抓取時間：{val(analysis_time)}
+- 資料取得方式：{"官方圖表解析 + 搜尋抽取" if freight.get("official_chart_parsed") else "搜尋抽取 / 備援資料"}
+- 航線資料狀態：{"三條主要航線皆有精確數字" if all(freight.get(route) is not None for route in ("us_west", "us_east", "europe")) else "部分航線仍不足"}
 - SCFI 最新值：{val(freight.get("scfi_latest"))}
 - SCFI 週變化：{val(freight.get("weekly_change"), "%")}
 - SCFI 連續週數：{val(freight.get("scfi_streak_weeks"))}
@@ -434,9 +500,12 @@ class AnalysisService:
 - 運價強度：{trend(freight_intel.get("strength"))}
 - 運價信心：{val(freight_intel.get("confidence"))}
 - 來源數量：{val(freight_intel.get("source_count"))}
+{chr(10).join(cache_lines)}
 
 ### 法人籌碼
 - 最新日期：{val(latest_inst.get("date"))}
+- 抓取時間：{val(analysis_time)}
+- 主要來源：FinMind 三大法人資料
 - 外資：{val(latest_inst.get("foreign"))}
 - 投信：{val(latest_inst.get("trust"))}
 - 自營商：{val(latest_inst.get("dealer"))}
@@ -445,6 +514,9 @@ class AnalysisService:
 - 投信 1 / 3 / 5 / 10 日：{val((flow.get("trust") or {}).get("1d"))} / {val((flow.get("trust") or {}).get("3d"))} / {val((flow.get("trust") or {}).get("5d"))} / {val((flow.get("trust") or {}).get("10d"))}
 
 ### 基本面
+- 最新月營收資料期別：{val(latest_revenue.get("revenue_year"))} 年 {val(latest_revenue.get("revenue_month"))} 月
+- 抓取時間：{val(analysis_time)}
+- 主要來源：FinMind 月營收 / EPS / 股利資料
 - EPS：{val(fundamentals.get("eps"))}
 - 本益比：{val(fundamentals.get("per"))}
 - 股價淨值比：{val(fundamentals.get("pbr"))}
@@ -452,6 +524,10 @@ class AnalysisService:
 - 月營收年增率：{val(fundamentals.get("monthly_revenue_yoy"), "%")}
 
 ### 事件與風險
+- 相關新聞最新發布時間：{val(latest_news_time)}
+- 新聞抓取時間：{val(analysis_time)}
+- 公告狀態：{trend(announcements.get("latest_event"))}
+- ETF 資料基準日：{val(etf.get("as_of"))}，是否過期或需交叉確認：{"是" if etf.get("stale") else "否"}
 - ETF 被動買盤：{trend(etf.get("etf_flow"))}，信心 {val(etf.get("confidence"))}
 - 紅海 / 蘇伊士狀態：{trend(red_sea.get("status"))}，航運影響 {trend(red_sea.get("shipping_impact"))}，信心 {val(red_sea.get("confidence"))}
 - 市場環境：{trend(regime.get("market_regime"))}，台股 {trend(regime.get("taiwan_market"))}，航運類股 {trend(regime.get("shipping_sector"))}，信心 {val(regime.get("confidence"))}
@@ -3456,6 +3532,34 @@ def _e_position_section(self: AnalysisService, mode: str, position: dict[str, An
 - 跌破 20 日均線：若同時 SCFI 轉弱與法人轉賣，風險升高"""
 
 
+def _e_freight_cache_lines(freight: dict[str, Any]) -> str:
+    if not freight.get("cache_used"):
+        return "- 快取補齊：否，本次報告以本次抓取與推論資料為主。"
+    fields = freight.get("cache_filled_fields") or []
+    field_names = {
+        "scfi_latest": "SCFI 最新值",
+        "weekly_change": "SCFI 週變化",
+        "scfi_streak_weeks": "SCFI 連續週數",
+        "us_west": "美西線",
+        "us_west_weekly_change": "美西線週變化",
+        "us_east": "美東線",
+        "us_east_weekly_change": "美東線週變化",
+        "europe": "歐洲線",
+        "europe_weekly_change": "歐洲線週變化",
+        "red_sea_status": "紅海狀態",
+        "latest_date": "航運資料日期",
+    }
+    readable = [field_names.get(field, field) for field in fields]
+    return (
+        "- 快取補齊：是，僅用於本次即時抓取缺漏的欄位，不視為今日即時報價。\n"
+        f"- 快取補齊欄位：{', '.join(readable) if readable else '資料不明'}\n"
+        f"- 快取資料日期：{freight.get('cache_data_date') or '資料不明'}\n"
+        f"- 快取建立時間：{freight.get('cache_fetched_at') or '資料不明'}\n"
+        f"- 快取來源：{freight.get('cache_source') or 'last_successful_freight_cache'}\n"
+        f"- 快取提醒：{freight.get('cache_note') or '快取只能降低資料缺口，不能取代本次實際抓取。'}"
+    )
+
+
 def _e_modules(self: AnalysisService, market: dict[str, Any]) -> str:
     etf = market.get("etf_flow", {})
     red = market.get("red_sea", {})
@@ -3596,6 +3700,7 @@ def _e_compose_report(
 - 美東線：{self._fmt(freight.get("us_east"))}，週變化 {self._fmt(freight.get("us_east_weekly_change"))}%
 - 歐洲線：{self._fmt(freight.get("europe"))}，週變化 {self._fmt(freight.get("europe_weekly_change"))}%
 - 運價智慧判讀：方向{_e_label(freight_intel.get("overall_trend"))}，強度{_e_label(freight_intel.get("strength"))}，信心 {freight_intel.get("confidence", 0)}，來源數 {freight_intel.get("source_count", 0)}。
+{_e_freight_cache_lines(freight)}
 - 對長榮的意義：{_e_freight_meaning(freight, freight_intel)}
 
 ## 法人籌碼證據

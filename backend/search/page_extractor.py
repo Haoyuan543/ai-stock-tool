@@ -29,6 +29,9 @@ def extract_pages_with_browser(results: list[dict[str, Any]], max_pages: int = 1
     missing: list[str] = []
     EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
 
+    settings = get_settings()
+    page_timeout_ms = max(12000, min(45000, int(settings.request_timeout * 1000)))
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1365, "height": 900}, locale="zh-TW")
@@ -53,8 +56,8 @@ def extract_pages_with_browser(results: list[dict[str, Any]], max_pages: int = 1
 
             page.on("response", on_response)
             try:
-                page.goto(row["url"], wait_until="domcontentloaded", timeout=12000)
-                page.wait_for_timeout(1000)
+                page.goto(row["url"], wait_until="domcontentloaded", timeout=page_timeout_ms)
+                page.wait_for_timeout(1500)
                 dom = page.evaluate(
                     """() => {
                         const tables = Array.from(document.querySelectorAll('table')).slice(0, 6).map((table) => table.innerText);
@@ -123,7 +126,7 @@ Page records:
             "https://api.openai.com/v1/responses",
             headers={"Authorization": f"Bearer {settings.openai_api_key}", "Content-Type": "application/json"},
             json={"model": settings.openai_model, "input": prompt, "max_output_tokens": 600},
-            timeout=httpx.Timeout(35.0, connect=10.0, read=35.0, write=10.0, pool=10.0),
+            timeout=httpx.Timeout(settings.openai_timeout_seconds, connect=20.0, read=settings.openai_timeout_seconds, write=20.0, pool=20.0),
         )
         response.raise_for_status()
         text = _extract_output_text(response.json())

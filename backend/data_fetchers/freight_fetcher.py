@@ -15,6 +15,7 @@ from backend.search.page_extractor import extract_pages_with_browser
 from backend.search.search_queries import freight_queries
 from backend.search.screenshot_analyzer import analyze_search_result_screenshots
 from backend.search.web_search import web_search
+from backend.services.freight_cache import apply_last_successful_freight_cache
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -105,6 +106,9 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
             data["red_sea_status"] = red_sea.get("status") if red_sea.get("status") != "unknown" else None
         if extracted:
             data["note"] = data.get("note", "") + " Web search intelligence was used for inferred context; exact values remain Data Missing unless explicitly extracted."
+
+    if _route_or_scfi_missing(data) or data.get("weekly_change") is None:
+        data = apply_last_successful_freight_cache(symbol, data, missing)
 
     if data.get("scfi_latest") is None:
         missing.append("Data Missing: SCFI latest value unavailable. Use data/scfi_routes.csv or manual freight supplement.")

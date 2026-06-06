@@ -65,6 +65,15 @@ def merge_extractions(primary: dict[str, Any] | None, secondary: dict[str, Any] 
         "inferred_trend": _dedupe((evidence.get("inferred_trend") or []) + (extra_evidence.get("inferred_trend") or [])),
         "missing_data": _dedupe((evidence.get("missing_data") or []) + (extra_evidence.get("missing_data") or [])),
     }
+    route_rates = merged.get("route_rates") or {}
+    if any(not _is_empty_value(route_rates.get(route)) for route in ("us_west", "us_east", "europe")):
+        stale_messages = {
+            "Exact route rates not found in extracted evidence.",
+            "Exact SCFI route rates were not found in public search snippets.",
+        }
+        merged["evidence_type"]["missing_data"] = [
+            item for item in merged["evidence_type"]["missing_data"] if item not in stale_messages
+        ]
     return merged
 
 
