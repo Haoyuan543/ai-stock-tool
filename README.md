@@ -10,6 +10,7 @@ This project now supports cloud scheduled analysis through GitHub Actions.
 - Job script: `backend/jobs/daily_analysis_email.py`
 - Full setup guide: `CLOUD_DEPLOYMENT.md`
 - Google Sheet setup: `GOOGLE_SHEETS_SETUP.md`
+- Supabase setup: `SUPABASE_SETUP.md`
 - Implementation plan: `PROJECT_EXECUTION_PLAN.md`
 - GitHub Project issue drafts: `GITHUB_PROJECT_TASKS.md`
 
@@ -33,12 +34,28 @@ $env:SEND_EMAIL="false"
 .\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbol 2603.TW --mode personalized --model gpt-5
 ```
 
+Multi-symbol local test:
+
+```powershell
+$env:SEND_EMAIL="false"
+.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbols "2603.TW,2609.TW,2615.TW" --mode personalized --model gpt-5
+```
+
 Required GitHub secrets:
 
 ```text
 OPENAI_API_KEY
 FINMIND_TOKEN
 NEWS_API_KEY
+```
+
+Optional long-term database secrets:
+
+```text
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+UPDATE_SUPABASE
+SUPABASE_REQUIRED
 ```
 
 Email secrets:

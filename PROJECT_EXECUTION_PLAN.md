@@ -105,6 +105,12 @@ GOOGLE_SHEETS_SETUP.md
 
 目標：一次排程可以分析多個股票。
 
+Status:
+
+```text
+implemented locally
+```
+
 執行位置：
 
 ```text
@@ -112,15 +118,14 @@ GOOGLE_SHEETS_SETUP.md
 正式排程：GitHub runner
 ```
 
-需要新增 / 修改：
+已新增 / 修改：
 
 - `backend/jobs/daily_analysis_email.py` 支援 `REPORT_SYMBOLS`
 - 單一股票失敗時，不中斷其他股票
 - 每檔股票各自產生 Markdown / HTML / JSON
 - Google Sheet 每檔股票新增一列
-- Email 可選擇：
-  - 每檔一封
-  - 或合併成一封摘要
+- 單檔時維持原本一封完整 email
+- 多檔時寄一封批次摘要，並附上各股票 Markdown / HTML
 
 建議第一批股票：
 
@@ -141,6 +146,12 @@ GitHub Secrets / Variables：
 REPORT_SYMBOLS=2603.TW,2609.TW,2615.TW
 ```
 
+手動 Run workflow 時，也可以直接填 `symbols`：
+
+```text
+2603.TW,2609.TW,2615.TW
+```
+
 完成標準：
 
 - 一次 workflow 成功分析多檔
@@ -150,6 +161,12 @@ REPORT_SYMBOLS=2603.TW,2609.TW,2615.TW
 ## Milestone 3：長期保存歷史資料到資料庫
 
 目標：把完整分析結果長期保存，讓未來能做回測、準確率、長期統計。
+
+Status:
+
+```text
+implemented locally
+```
 
 建議服務：
 
@@ -165,17 +182,21 @@ Supabase PostgreSQL
 資料保存：Supabase
 ```
 
-需要新增：
+已新增 / 修改：
 
 - `backend/integrations/supabase_client.py`
 - `database/schema.sql`
 - `backend/services/history_writer.py`
+- `backend/jobs/daily_analysis_email.py` 整合 Supabase 寫入
+- `.github/workflows/daily-analysis.yml` 新增 secrets
 
 GitHub Secrets：
 
 ```text
 SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
+UPDATE_SUPABASE
+SUPABASE_REQUIRED
 ```
 
 資料表：

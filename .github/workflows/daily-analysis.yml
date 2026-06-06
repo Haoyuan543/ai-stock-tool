@@ -7,6 +7,10 @@ on:
         description: "Stock symbol"
         required: false
         default: "2603.TW"
+      symbols:
+        description: "Comma-separated symbols. Overrides symbol when provided."
+        required: false
+        default: ""
       mode:
         description: "general or personalized"
         required: false
@@ -70,7 +74,12 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
           GOOGLE_SHEET_WORKSHEET: ${{ secrets.GOOGLE_SHEET_WORKSHEET || 'analysis_log' }}
+          UPDATE_SUPABASE: ${{ secrets.UPDATE_SUPABASE || 'true' }}
+          SUPABASE_REQUIRED: ${{ secrets.SUPABASE_REQUIRED || 'false' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           REPORT_SYMBOL: ${{ github.event.inputs.symbol || '2603.TW' }}
+          REPORT_SYMBOLS: ${{ github.event.inputs.symbols || secrets.REPORT_SYMBOLS }}
           REPORT_MODE: ${{ github.event.inputs.mode || 'personalized' }}
           REPORT_MODEL: ${{ github.event.inputs.model || secrets.OPENAI_MODEL }}
           SEND_EMAIL: ${{ github.event.inputs.send_email || 'true' }}
