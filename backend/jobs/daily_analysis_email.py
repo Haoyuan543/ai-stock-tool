@@ -389,7 +389,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run scheduled AI investment analysis and optionally email the report.")
     parser.add_argument("--symbol", default=_env("REPORT_SYMBOL", "2603.TW"))
     parser.add_argument("--symbols", default=_env("REPORT_SYMBOLS", ""))
-    parser.add_argument("--mode", default=_env("REPORT_MODE", "personalized"), choices=["general", "personalized"])
+    parser.add_argument("--mode", default=_env("REPORT_MODE", "general"), choices=["general", "personalized"])
     parser.add_argument("--model", default=_env("REPORT_MODEL", ""))
     parser.add_argument("--manual-context", default=_env("REPORT_MANUAL_CONTEXT", ""))
     parser.add_argument("--send-email", action="store_true", default=_env("SEND_EMAIL", "true").lower() in {"1", "true", "yes"})

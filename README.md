@@ -34,14 +34,14 @@ Local test without sending email:
 
 ```powershell
 $env:SEND_EMAIL="false"
-.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbol 2603.TW --mode personalized --model gpt-5
+.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbol 2603.TW --mode general --model gpt-5
 ```
 
 Multi-symbol local test:
 
 ```powershell
 $env:SEND_EMAIL="false"
-.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbols "2603.TW,2609.TW,2615.TW" --mode personalized --model gpt-5
+.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbols "2603.TW,2609.TW,2615.TW" --mode general --model gpt-5
 ```
 
 Required GitHub secrets:
@@ -333,7 +333,7 @@ Request:
 ```json
 {
   "symbol": "2603.TW",
-  "mode": "personalized",
+  "mode": "general",
   "freight_overrides": {
     "scfi_latest": "1200",
     "scfi_weekly_change": "1.2",
@@ -351,7 +351,7 @@ Response includes:
 ```json
 {
   "symbol": "2603.TW",
-  "mode": "personalized",
+  "mode": "general",
   "data_status": {},
   "data_freshness": {},
   "market_data": {},

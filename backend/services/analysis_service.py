@@ -42,7 +42,7 @@ class AnalysisService:
     def analyze_now(
         self,
         symbol: str,
-        mode: str = "personalized",
+        mode: str = "general",
         freight_overrides: dict[str, Any] | None = None,
         manual_context: str = "",
         model: str = "",

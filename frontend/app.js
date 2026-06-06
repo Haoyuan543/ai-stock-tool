@@ -66,7 +66,7 @@ async function loadModels() {
 
 async function analyzeNow() {
   const symbol = document.querySelector("#symbolInput").value.trim() || "2603.TW";
-  const mode = document.querySelector("#modeInput").value || "personalized";
+  const mode = document.querySelector("#modeInput").value || "general";
   const model = document.querySelector("#modelInput").value;
   const manualContext = document.querySelector("#manualContext").value.trim();
 

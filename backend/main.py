@@ -38,7 +38,7 @@ analysis_service = AnalysisService()
 
 class AnalyzeRequest(BaseModel):
     symbol: str = "2603.TW"
-    mode: str = "personalized"
+    mode: str = "general"
     model: str = ""
     freight_overrides: dict = {}
     manual_context: str = ""

@@ -14,7 +14,7 @@ on:
       mode:
         description: "general or personalized"
         required: false
-        default: "personalized"
+        default: "general"
       model:
         description: "OpenAI model override"
         required: false
@@ -82,7 +82,7 @@ jobs:
           RUN_REPORT_AUDIT: ${{ secrets.RUN_REPORT_AUDIT || 'true' }}
           REPORT_SYMBOL: ${{ github.event.inputs.symbol || '2603.TW' }}
           REPORT_SYMBOLS: ${{ github.event.inputs.symbols || secrets.REPORT_SYMBOLS }}
-          REPORT_MODE: ${{ github.event.inputs.mode || 'personalized' }}
+          REPORT_MODE: ${{ github.event.inputs.mode || 'general' }}
           REPORT_MODEL: ${{ github.event.inputs.model || secrets.OPENAI_MODEL }}
           SEND_EMAIL: ${{ github.event.inputs.send_email || 'true' }}
         run: python -m backend.jobs.daily_analysis_email
