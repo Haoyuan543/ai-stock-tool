@@ -3828,3 +3828,240 @@ AnalysisService._compose_report = _e_compose_report
 AnalysisService._decision_modules_markdown = _e_modules
 AnalysisService._fmt = _e_fmt
 AnalysisService._pct_or_missing = _e_pct_prob
+
+
+def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> str:
+    market = payload.get("market_data") or {}
+    freshness = payload.get("data_freshness") or {}
+    stock = market.get("stock") or {}
+    technical = stock.get("technical") or {}
+    freight = market.get("freight") or {}
+    freight_intel = freight.get("intelligence") or {}
+    inst = market.get("institutional") or {}
+    latest_inst = inst.get("latest") or {}
+    flows = inst.get("flow_sums") or inst.get("flow_summary") or {}
+    fundamentals = market.get("fundamentals") or {}
+    latest_revenue = fundamentals.get("latest_monthly_revenue") or fundamentals.get("latest_month_revenue") or {}
+    news = market.get("news") or {}
+    news_relevance = market.get("news_relevance") or {}
+    etf = market.get("etf_flow") or {}
+    red = market.get("red_sea_intelligence") or market.get("red_sea") or {}
+    ann = market.get("announcement_intelligence") or {}
+    regime = market.get("market_regime") or {}
+    regime_snapshot = regime.get("market_snapshot") or {}
+    intl = market.get("international_events") or {}
+    oil = intl.get("oil") or {}
+    oil_prices = intl.get("oil_prices") or {}
+    wti = oil.get("wti") or oil_prices.get("wti") or {}
+    brent = oil.get("brent") or oil_prices.get("brent") or {}
+    scores = (payload.get("local_scores") or {}).get("revised_score") or {}
+    truth = payload.get("truthfulness") or {}
+    data_status = payload.get("data_status") or {}
+    missing = payload.get("missing") or []
+    sources = payload.get("sources") or []
+
+    def fmt(value: Any, digits: int = 2) -> str:
+        if value is None or value == "":
+            return "資料不足"
+        if isinstance(value, float):
+            if digits == 0:
+                return str(int(round(value)))
+            return f"{value:.{digits}f}".rstrip("0").rstrip(".")
+        return str(value)
+
+    def pct(value: Any) -> str:
+        return "資料不足" if value is None or value == "" else f"{fmt(value)}%"
+
+    def flow_line(key: str, label: str) -> str:
+        row = flows.get(key) or {}
+        if not row:
+            return f"| {label} | 資料不足 | 資料不足 | 資料不足 | 資料不足 |"
+        return f"| {label} | {fmt(row.get('1d'), 0)} | {fmt(row.get('3d'), 0)} | {fmt(row.get('5d'), 0)} | {fmt(row.get('10d'), 0)} |"
+
+    def snapshot_line(key: str, label: str) -> str:
+        row = regime_snapshot.get(key) or {}
+        if not row:
+            return f"| {label} | 資料不足 | 資料不足 | 資料不足 | 資料不足 |"
+        return (
+            f"| {label} | {fmt(row.get('date'))} | {fmt(row.get('close'))} | "
+            f"{pct(row.get('change_1d_pct'))} | {pct(row.get('change_5d_pct'))} |"
+        )
+
+    source_lines = []
+    for source in sources[:20]:
+        name = source.get("name") or source.get("source") or "資料來源"
+        url = source.get("url") or ""
+        as_of = source.get("as_of") or source.get("published_at") or source.get("date") or ""
+        tail = f"（資料日：{as_of}）" if as_of else ""
+        source_lines.append(f"- {name}{tail}{'：' + url if url else ''}")
+    if not source_lines:
+        source_lines = ["- 本次沒有可列示的資料來源。"]
+
+    news_items = news_relevance.get("filtered_news") or news.get("items") or []
+    news_lines = []
+    for item in news_items[:8]:
+        title = item.get("title") or "未命名新聞"
+        source = item.get("source") or item.get("name") or "未知來源"
+        published = item.get("published_at") or item.get("publishedAt") or item.get("date") or "日期未知"
+        relevance = item.get("relevance_score")
+        sentiment = item.get("sentiment")
+        url = item.get("url") or ""
+        meta = f"相關度 {fmt(relevance)}" if relevance is not None else "相關度未評分"
+        if sentiment:
+            meta += f"，情緒 {sentiment}"
+        news_lines.append(f"- {published}｜{source}｜{title}（{meta}）{'：' + url if url else ''}")
+    if not news_lines:
+        news_lines = ["- 本次沒有可列示的高相關新聞。"]
+
+    missing_lines = [f"- {self._user_message(item)}" for item in missing[:12]] or ["- 無核心資料缺漏。"]
+
+    return f"""
+
+---
+
+## 事實依據摘要
+
+- 本次股價、法人、運價、新聞與基本面資料狀態列於下方表格。
+- 三條主要航線若有數字，會直接列出數值與週變化，方便核對運價判斷。
+- 搜尋推論、過期資料與仍需交叉確認的資料會在限制欄位標示，不會當成官方精確資料。
+
+## 本次抓取資料核對表
+
+這一段列出本次實際抓到或推論得到的資料，方便你核對報告是否有根據。
+
+### 1. 資料狀態與時間
+
+| 項目 | 內容 |
+|---|---|
+| 分析時間 | {fmt(freshness.get("analysis_time") or payload.get("timestamp"))} |
+| 股價資料日期 | {fmt(freshness.get("price_data_date"))} |
+| 是否即時股價 | {"是" if freshness.get("is_realtime_price") else "否"} |
+| 是否收盤資料 | {"是" if freshness.get("is_closing_price") else "否"} |
+| 股價 | {data_status.get("stock", "資料不足")} |
+| 法人 | {data_status.get("institutional", "資料不足")} |
+| 運價 | {data_status.get("freight", "資料不足")} |
+| 新聞 | {data_status.get("news", "資料不足")} |
+| 基本面 | {data_status.get("fundamental", "資料不足")} |
+| 公告 | {data_status.get("announcements", "資料不足")} |
+
+### 2. 股價與技術資料
+
+| 指標 | 數值 |
+|---|---:|
+| 股票代號 | {fmt(stock.get("symbol") or payload.get("symbol"))} |
+| 股價資料日 | {fmt(stock.get("latest_date"))} |
+| 收盤價 | {fmt(stock.get("close"))} |
+| 成交量 | {fmt(stock.get("volume"), 0)} |
+| 1 日漲跌幅 | {pct(stock.get("change_pct"))} |
+| 20 日均線 | {fmt(stock.get("ma20"))} |
+| 60 日均線 | {fmt(stock.get("ma60"))} |
+| 20 日支撐 | {fmt(stock.get("support_20d"))} |
+| 20 日壓力 | {fmt(stock.get("resistance_20d"))} |
+| RSI 14 | {fmt(technical.get("rsi14"))} |
+| MACD | {fmt(technical.get("macd"))} |
+| MACD Signal | {fmt(technical.get("macd_signal"))} |
+| 布林上緣 | {fmt(technical.get("bollinger_upper"))} |
+| 布林中線 | {fmt(technical.get("bollinger_middle"))} |
+| 布林下緣 | {fmt(technical.get("bollinger_lower"))} |
+
+### 3. SCFI 與主要航線
+
+| 項目 | 數值 | 週變化 |
+|---|---:|---:|
+| SCFI 綜合指數 | {fmt(freight.get("scfi_latest"))} | {pct(freight.get("weekly_change"))} |
+| SCFI 連續週數 | {fmt(freight.get("scfi_streak_weeks"), 0)} | - |
+| 美西線 | {fmt(freight.get("us_west"))} | {pct(freight.get("us_west_weekly_change"))} |
+| 美東線 | {fmt(freight.get("us_east"))} | {pct(freight.get("us_east_weekly_change"))} |
+| 歐洲線 | {fmt(freight.get("europe"))} | {pct(freight.get("europe_weekly_change"))} |
+| 地中海線 | {fmt(freight.get("mediterranean"))} | - |
+| 亞洲區域線 | {fmt(freight.get("asia_regional"))} | - |
+
+- 運價方向：{freight_intel.get("overall_trend", "資料不足")}
+- 運價強度：{freight_intel.get("strength", "資料不足")}
+- 運價信心：{fmt(freight_intel.get("confidence"))}
+- 來源數量：{fmt(freight_intel.get("source_count"), 0)}
+- 精確主要航線筆數：{fmt(freight_intel.get("exact_route_count"), 0)}
+
+### 4. 法人籌碼
+
+| 項目 | 外資 | 投信 | 自營商 | 合計 |
+|---|---:|---:|---:|---:|
+| 最新一日（{fmt(latest_inst.get("date"))}） | {fmt(latest_inst.get("foreign"), 0)} | {fmt(latest_inst.get("trust"), 0)} | {fmt(latest_inst.get("dealer"), 0)} | {fmt(latest_inst.get("total"), 0)} |
+
+| 法人 | 1 日 | 3 日 | 5 日 | 10 日 |
+|---|---:|---:|---:|---:|
+{flow_line("foreign", "外資")}
+{flow_line("trust", "投信")}
+{flow_line("dealer", "自營商")}
+{flow_line("total", "三大法人合計")}
+
+### 5. 基本面與股利
+
+| 項目 | 數值 |
+|---|---:|
+| 月營收年度 | {fmt(latest_revenue.get("revenue_year"))} |
+| 月營收月份 | {fmt(latest_revenue.get("revenue_month"))} |
+| 月營收 YoY | {pct(fundamentals.get("monthly_revenue_yoy"))} |
+| EPS | {fmt(fundamentals.get("eps"))} |
+| 本益比 | {fmt(fundamentals.get("per"))} |
+| 股價淨值比 | {fmt(fundamentals.get("pbr"))} |
+| 現金股利 | {fmt(fundamentals.get("cash_dividend"))} |
+| 股利殖利率 | {pct(fundamentals.get("dividend_yield"))} |
+| 除息日 | {fmt(fundamentals.get("ex_dividend_date"))} |
+
+### 6. 國際事件、市場環境與油價
+
+| 指標 | 資料日 | 收盤 / 數值 | 1 日變化 | 5 日變化 |
+|---|---|---:|---:|---:|
+{snapshot_line("taiwan_index", "台股加權")}
+{snapshot_line("vix", "VIX")}
+{snapshot_line("dxy", "美元指數")}
+{snapshot_line("usd_twd", "美元兌台幣")}
+{snapshot_line("sp500", "S&P 500")}
+
+| 油價 | 資料日 | 價格 | 1 日變化 | 5 日變化 |
+|---|---|---:|---:|---:|
+| WTI | {fmt(wti.get("date"))} | {fmt(wti.get("close"))} | {pct(wti.get("change_1d_pct"))} | {pct(wti.get("change_5d_pct"))} |
+| Brent | {fmt(brent.get("date"))} | {fmt(brent.get("close"))} | {pct(brent.get("change_1d_pct"))} | {pct(brent.get("change_5d_pct"))} |
+
+- 市場環境：{regime.get("market_regime", "資料不足")}，信心 {fmt(regime.get("confidence"))}
+- 台股：{regime.get("taiwan_market", "資料不足")}
+- 航運族群：{regime.get("shipping_sector", "資料不足")}
+- 美股：{regime.get("us_market", "資料不足")}
+- 油價判讀：{oil.get("summary") or "資料不足"}
+
+### 7. ETF、紅海與公告
+
+| 模組 | 結果 | 信心 | 備註 |
+|---|---|---:|---|
+| ETF 被動買盤 | {etf.get("etf_flow", "資料不足")} | {fmt(etf.get("confidence"))} | 持股變化 {fmt(etf.get("holding_change"))}；基金規模變化 {fmt(etf.get("aum_change"))}；資料日 {fmt(etf.get("as_of"))} |
+| 紅海 / 蘇伊士 | {red.get("status", "資料不足")} | {fmt(red.get("confidence"))} | 航運影響 {red.get("shipping_impact", "資料不足")}；蘇伊士回流風險 {red.get("suez_return_risk", "資料不足")} |
+| 公司公告 | {ann.get("latest_event", "資料不足")} | {fmt(ann.get("confidence"))} | 重大性 {ann.get("materiality", "資料不足")}；抓取失敗不可解讀為沒有公告 |
+
+### 8. 高相關新聞
+
+{chr(10).join(news_lines)}
+
+### 9. 分數與可信度
+
+| 分數 | 數值 |
+|---|---:|
+| 方向分數 | {fmt(scores.get("direction_score"), 0)} |
+| 時機分數 | {fmt(scores.get("timing_score"), 0)} |
+| 估值分數 | {fmt(scores.get("valuation_score"), 0)} |
+| 風險分數 | {fmt(scores.get("risk_score"), 0)} |
+| 資料完整度 | {fmt(scores.get("data_coverage"), 0)} |
+| 真實性分數 | {fmt(scores.get("truthfulness_score") or truth.get("truthfulness_score"), 0)} |
+| 總分 | {fmt(scores.get("overall_score"), 0)} |
+
+### 10. 本次資料限制
+
+{chr(10).join(missing_lines)}
+
+### 11. 資料來源
+
+{chr(10).join(source_lines)}
+"""
+
+
+AnalysisService._compose_evidence_appendix = _clean_evidence_appendix
