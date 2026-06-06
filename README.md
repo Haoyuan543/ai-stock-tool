@@ -9,6 +9,7 @@ This project now supports cloud scheduled analysis through GitHub Actions.
 - Workflow: `.github/workflows/daily-analysis.yml`
 - Job script: `backend/jobs/daily_analysis_email.py`
 - Full setup guide: `CLOUD_DEPLOYMENT.md`
+- Google Sheet setup: `GOOGLE_SHEETS_SETUP.md`
 - Implementation plan: `PROJECT_EXECUTION_PLAN.md`
 - GitHub Project issue drafts: `GITHUB_PROJECT_TASKS.md`
 

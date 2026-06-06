@@ -65,6 +65,11 @@ jobs:
           SMTP_STARTTLS: ${{ secrets.SMTP_STARTTLS }}
           REPORT_EMAIL_FROM: ${{ secrets.REPORT_EMAIL_FROM }}
           REPORT_EMAIL_TO: ${{ secrets.REPORT_EMAIL_TO }}
+          UPDATE_GOOGLE_SHEET: ${{ secrets.UPDATE_GOOGLE_SHEET || 'true' }}
+          GOOGLE_SHEET_REQUIRED: ${{ secrets.GOOGLE_SHEET_REQUIRED || 'false' }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          GOOGLE_SHEET_WORKSHEET: ${{ secrets.GOOGLE_SHEET_WORKSHEET || 'analysis_log' }}
           REPORT_SYMBOL: ${{ github.event.inputs.symbol || '2603.TW' }}
           REPORT_MODE: ${{ github.event.inputs.mode || 'personalized' }}
           REPORT_MODEL: ${{ github.event.inputs.model || secrets.OPENAI_MODEL }}

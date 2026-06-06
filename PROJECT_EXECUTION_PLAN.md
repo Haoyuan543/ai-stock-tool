@@ -24,6 +24,12 @@ GitHub runner 適合「排程執行」，不適合「直接在上面開發」。
 
 目標：每天分析後，把摘要寫入 Google Sheet，形成可閱讀的每日紀錄表。
 
+Status:
+
+```text
+implemented locally
+```
+
 執行位置：
 
 ```text
@@ -31,12 +37,13 @@ GitHub runner 適合「排程執行」，不適合「直接在上面開發」。
 正式排程：GitHub runner
 ```
 
-需要新增：
+已新增 / 修改：
 
 - `backend/integrations/google_sheets.py`
 - `backend/jobs/daily_analysis_email.py` 整合 Google Sheet append
 - `.env.example` 新增 Google Sheet 設定
 - `.github/workflows/daily-analysis.yml` 新增 secrets
+- `requirements.txt` 新增 `google-auth`
 
 GitHub Secrets：
 
@@ -44,6 +51,8 @@ GitHub Secrets：
 GOOGLE_SERVICE_ACCOUNT_JSON
 GOOGLE_SHEET_ID
 GOOGLE_SHEET_WORKSHEET
+UPDATE_GOOGLE_SHEET
+GOOGLE_SHEET_REQUIRED
 ```
 
 Google Sheet 欄位：
@@ -85,6 +94,12 @@ data_limitations
 - 不會覆蓋舊資料
 - API key 不會出現在 repo
 - Email 仍正常寄送
+
+Setup guide:
+
+```text
+GOOGLE_SHEETS_SETUP.md
+```
 
 ## Milestone 2：多股票分析
 
@@ -353,4 +368,3 @@ Done
 9. 確認 Email / artifact / Sheet / DB
 10. 再等待正式排程自動跑
 ```
-

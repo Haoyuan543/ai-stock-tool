@@ -10,6 +10,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
+from backend.integrations.google_sheets import append_analysis_summary
 from backend.services.analysis_service import AnalysisService
 
 
@@ -157,6 +158,19 @@ def send_email(result: dict[str, Any], files: dict[str, Path]) -> bool:
     return True
 
 
+def update_google_sheet(result: dict[str, Any], files: dict[str, Path]) -> bool:
+    if _env("UPDATE_GOOGLE_SHEET", "true").lower() not in {"1", "true", "yes"}:
+        print("Google Sheet skipped: UPDATE_GOOGLE_SHEET is false.")
+        return False
+    try:
+        return append_analysis_summary(result, files)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Google Sheet update failed: {exc}")
+        if _env("GOOGLE_SHEET_REQUIRED", "false").lower() in {"1", "true", "yes"}:
+            raise
+        return False
+
+
 def run(symbol: str, mode: str, model: str, manual_context: str, send: bool) -> dict[str, Any]:
     result = AnalysisService().analyze_now(
         symbol=symbol,
@@ -168,6 +182,7 @@ def run(symbol: str, mode: str, model: str, manual_context: str, send: bool) -> 
     print("Saved report files:")
     for key, path in files.items():
         print(f"- {key}: {path}")
+    update_google_sheet(result, files)
     if send:
         send_email(result, files)
     return result
