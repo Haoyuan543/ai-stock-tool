@@ -63,6 +63,7 @@ def build_summary_row(result: dict[str, Any], files: dict[str, Path] | None = No
     freshness = result.get("data_freshness") or {}
     truth = result.get("truthfulness") or {}
     action = result.get("action_plan") or {}
+    audit = result.get("report_audit") or {}
     files = files or {}
 
     limitations = result.get("data_limitations") or result.get("warnings") or []
@@ -94,6 +95,8 @@ def build_summary_row(result: dict[str, Any], files: dict[str, Path] | None = No
         _fmt(result.get("analysis_mode")),
         _fmt(result.get("model_used")),
         _fmt(result.get("elapsed_seconds")),
+        _fmt(audit.get("audit_score")),
+        _fmt(audit.get("needs_revision")),
         _fmt(top_limitations),
         _fmt(html_report),
     ]
@@ -125,6 +128,8 @@ def header_row() -> list[str]:
         "analysis_mode",
         "model_used",
         "elapsed_seconds",
+        "audit_score",
+        "needs_revision",
         "top_data_limitations",
         "html_report_file",
     ]
@@ -151,4 +156,3 @@ def append_analysis_summary(result: dict[str, Any], files: dict[str, Path] | Non
     response.raise_for_status()
     print(f"Google Sheet appended: {worksheet}")
     return True
-

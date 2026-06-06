@@ -24,10 +24,13 @@ create table if not exists analysis_runs (
   market_data_json jsonb,
   data_quality_json jsonb,
   truthfulness_json jsonb,
+  audit_json jsonb,
   report_markdown text,
   warnings_json jsonb,
   created_at timestamptz default now()
 );
+
+alter table analysis_runs add column if not exists audit_json jsonb;
 
 create table if not exists market_snapshots (
   snapshot_id text primary key,

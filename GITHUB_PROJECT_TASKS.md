@@ -109,6 +109,7 @@ Tasks:
 
 Done:
 - 可看到每個 horizon 的勝率與平均報酬
+- Status: implemented locally
 ```
 
 ## Issue 5
@@ -137,5 +138,5 @@ Tasks:
 Done:
 - 報告不再出現不專業或矛盾結論
 - audit score 低於門檻會標示需修正
+- Status: implemented locally
 ```
-

@@ -43,6 +43,15 @@ market_snapshots
 prediction_validations
 ```
 
+如果你之前已經建立過 `analysis_runs`，請仍然重新執行一次 `database/schema.sql`。  
+它包含：
+
+```sql
+alter table analysis_runs add column if not exists audit_json jsonb;
+```
+
+所以可以安全補上自我審查欄位。
+
 ## 3. 設定 GitHub Secrets
 
 到：
@@ -104,6 +113,77 @@ EPS
 原始 market_data JSON
 ```
 
+`prediction_validations` 會保存：
+
+```text
+prediction_id
+symbol
+horizon: 7d / 30d / 90d
+base_price
+future_price
+actual_return
+max_drawdown
+correct
+validated_at
+details_json
+```
+
+## 4.1 每日自動驗證
+
+GitHub Actions 每次跑完分析後，會自動執行：
+
+```text
+validate_due_predictions()
+```
+
+它會：
+
+1. 從 `analysis_runs` 讀取歷史分析。
+2. 找出已滿 7 / 30 / 90 天的紀錄。
+3. 抓目前股價歷史。
+4. 計算實際報酬、最大回撤、方向是否判斷正確。
+5. 寫入 `prediction_validations`。
+
+需要 GitHub Secret：
+
+```text
+VALIDATE_PREDICTIONS=true
+```
+
+如果要暫停驗證：
+
+```text
+VALIDATE_PREDICTIONS=false
+```
+
+## 4.2 自我審查保存
+
+每次報告寄出前會先跑 Report Audit，檢查：
+
+```text
+強結論與分數是否矛盾
+低時機分數是否仍建議追價
+低風險分數是否仍建議積極操作
+資料可信度不足是否有揭露
+股價非即時是否有提醒
+是否出現工程字眼
+是否缺少核心報告區塊
+```
+
+結果會寫入 `analysis_runs.audit_json`。
+
+需要 GitHub Secret：
+
+```text
+RUN_REPORT_AUDIT=true
+```
+
+如果要暫停：
+
+```text
+RUN_REPORT_AUDIT=false
+```
+
 ## 5. 本機測試
 
 `.env` 加上：
@@ -134,4 +214,3 @@ Supabase history written.
 - 如果 table 尚未建立，會回傳 404 或 relation not found。
 - 如果 Row Level Security 擋住寫入，請確認你使用的是 service_role key。
 - GitHub runner 是臨時機器，長期歷史要靠 Supabase 保存，不要靠 runner 裡的 `data/*.jsonl`。
-

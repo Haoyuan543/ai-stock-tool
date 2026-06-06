@@ -79,6 +79,8 @@ model_used
 report_html_artifact
 top_risks
 data_limitations
+audit_score
+needs_revision
 ```
 
 驗證方式：
@@ -239,17 +241,23 @@ created_at
 
 目標：自動檢查過去 AI 判斷是否有效。
 
+Status:
+
+```text
+implemented locally
+```
+
 前置條件：
 
 ```text
 Milestone 3 資料庫完成
 ```
 
-需要新增：
+已新增 / 修改：
 
 - `backend/services/prediction_validation_service.py`
 - GitHub Actions 每天分析後執行 validation
-- Google Sheet / Supabase 寫入驗證結果
+- Supabase 寫入 `prediction_validations`
 
 驗證內容：
 
@@ -287,6 +295,12 @@ validated_at
 
 目標：每次報告產生後，系統自我審查一次，避免假強結論、資料不足卻過度樂觀、報告格式不專業。
 
+Status:
+
+```text
+implemented locally
+```
+
 執行位置：
 
 ```text
@@ -294,11 +308,11 @@ validated_at
 正式排程：GitHub runner
 ```
 
-需要新增：
+已新增 / 修改：
 
 - `backend/services/report_auditor.py`
-- `backend/services/report_rewriter.py` 可選
 - `backend/jobs/daily_analysis_email.py` 整合 audit
+- `database/schema.sql` 保存 audit_json
 
 審查項目：
 

@@ -13,6 +13,8 @@ from typing import Any
 from backend.integrations.google_sheets import append_analysis_summary
 from backend.services.analysis_service import AnalysisService
 from backend.services.history_writer import write_history_to_supabase
+from backend.services.prediction_validation_service import validate_due_predictions
+from backend.services.report_auditor import audit_report
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -274,6 +276,12 @@ def run_one(
         model=model,
         manual_context=manual_context,
     )
+    if _env("RUN_REPORT_AUDIT", "true").lower() in {"1", "true", "yes"}:
+        result["report_audit"] = audit_report(result)
+        audit = result["report_audit"]
+        print(f"Report audit: score={audit['audit_score']}, needs_revision={audit['needs_revision']}")
+    else:
+        result["report_audit"] = {"audit_score": None, "needs_revision": False, "audit_warnings": [], "failed_rules": []}
     files = save_outputs(result)
     print("Saved report files:")
     for key, path in files.items():
@@ -309,6 +317,7 @@ def run_many(symbols: list[str], mode: str, model: str, manual_context: str, sen
 
     if not any(item.get("result") for item in items):
         raise RuntimeError("All scheduled analyses failed.")
+    validate_due_predictions()
     return items
 
 

@@ -43,6 +43,8 @@ overall_score
 analysis_mode
 model_used
 elapsed_seconds
+audit_score
+needs_revision
 top_data_limitations
 html_report_file
 ```
@@ -164,4 +166,3 @@ Google Sheet appended: analysis_log
 - JSON key 只放在 GitHub Secrets。
 - 如果 Sheet 沒有分享給 service account，會出現 403 權限錯誤。
 - 如果分頁名稱不對，會出現 range 或 worksheet 相關錯誤。
-

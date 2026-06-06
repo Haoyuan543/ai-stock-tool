@@ -59,6 +59,7 @@ def build_analysis_run_row(result: dict[str, Any]) -> dict[str, Any]:
         "market_data_json": _json(result.get("market_data")),
         "data_quality_json": _json(result.get("data_quality")),
         "truthfulness_json": _json(result.get("truthfulness")),
+        "audit_json": _json(result.get("report_audit")),
         "report_markdown": result.get("report_markdown") or result.get("ai_report") or "",
         "warnings_json": _json(result.get("warnings")),
     }

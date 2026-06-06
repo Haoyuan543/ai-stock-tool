@@ -78,6 +78,8 @@ jobs:
           SUPABASE_REQUIRED: ${{ secrets.SUPABASE_REQUIRED || 'false' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VALIDATE_PREDICTIONS: ${{ secrets.VALIDATE_PREDICTIONS || 'true' }}
+          RUN_REPORT_AUDIT: ${{ secrets.RUN_REPORT_AUDIT || 'true' }}
           REPORT_SYMBOL: ${{ github.event.inputs.symbol || '2603.TW' }}
           REPORT_SYMBOLS: ${{ github.event.inputs.symbols || secrets.REPORT_SYMBOLS }}
           REPORT_MODE: ${{ github.event.inputs.mode || 'personalized' }}
