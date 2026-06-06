@@ -23,10 +23,6 @@ on:
         description: "Send email report"
         required: false
         default: "true"
-  schedule:
-    # Taiwan time = UTC+8. This runs every day at 08:10 and 20:10 Asia/Taipei.
-    - cron: "10 0 * * *"
-    - cron: "10 12 * * *"
 
 jobs:
   analyze:
@@ -54,10 +50,15 @@ jobs:
       - name: Install Chromium for Playwright
         run: python -m playwright install --with-deps chromium
 
-      - name: Print schedule diagnostics
+      - name: Print trigger diagnostics
         run: |
           echo "event_name=${{ github.event_name }}"
           echo "schedule=${{ github.event.schedule }}"
+          echo "input_symbol=${{ github.event.inputs.symbol }}"
+          echo "input_symbols=${{ github.event.inputs.symbols }}"
+          echo "input_mode=${{ github.event.inputs.mode }}"
+          echo "input_model=${{ github.event.inputs.model }}"
+          echo "input_send_email=${{ github.event.inputs.send_email }}"
           echo "ref=${{ github.ref }}"
           echo "branch=${{ github.ref_name }}"
           echo "sha=${{ github.sha }}"

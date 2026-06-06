@@ -1,65 +1,76 @@
-# 雲端排程與寄信部署指南
+# 雲端自動分析部署說明
 
-這份專案可以拆成兩種雲端使用方式：
+本專案目前採用：
 
-1. **每日自動分析並寄 Email**：建議先用 GitHub Actions。成本低，不需要自己的電腦開著。
-2. **長時間在線 Dashboard**：之後再部署到 Render、Railway、Fly.io、Google Cloud Run 或 VPS。
+1. GitHub Actions 執行分析
+2. cron-job.org 負責準時觸發
+3. Supabase 保存歷史資料
+4. SMTP 寄送每日報告
 
-目前已先完成第 1 種：GitHub Actions 每天固定時間執行分析，產生 Markdown / HTML / JSON 報告，並可寄到你的信箱。
+這樣做的原因是 GitHub 內建 `schedule` 有時會延遲數十分鐘到數小時，不適合要求早晚固定時間收到報告的情境。
 
-## 已新增的檔案
+## 核心檔案
 
 - `.github/workflows/daily-analysis.yml`
 - `backend/jobs/daily_analysis_email.py`
+- `CRON_JOB_ORG_SETUP.md`
+- `SUPABASE_SETUP.md`
+- `USER_MANUAL.md`
 
-## GitHub Actions 的運作方式
-
-流程如下：
-
-1. GitHub 到指定時間自動啟動一台臨時雲端機器。
-2. 安裝 Python 套件與 Playwright Chromium。
-3. 執行 `python -m backend.jobs.daily_analysis_email`。
-4. 即時抓股價、法人、SCFI、新聞、公告、國際事件。
-5. 呼叫 OpenAI 產生報告。
-6. 儲存報告為 Markdown、HTML、JSON。
-7. 如果 SMTP 設定完整，就寄 Email 給你。
-8. 報告也會上傳成 GitHub Actions artifact，可在 GitHub 頁面下載。
-
-## 預設排程時間
-
-目前設定為：
+## 執行流程
 
 ```text
-台灣時間 16:40，週一到週五
+cron-job.org
+  -> 呼叫 GitHub API workflow_dispatch
+  -> GitHub Actions 啟動 daily-analysis.yml
+  -> 安裝 Python / 套件 / Chromium
+  -> 執行 backend.jobs.daily_analysis_email
+  -> 抓股價、法人、SCFI、新聞、基本面、市場環境、油價
+  -> 呼叫 OpenAI 產生報告
+  -> 寫入 Supabase
+  -> 產生 Markdown / HTML / JSON artifact
+  -> 寄出 Email
 ```
 
-對應 GitHub Actions 的 UTC cron：
+## 為什麼不用 GitHub 內建 schedule
+
+GitHub Actions 的 `schedule` 是 GitHub 平台排隊派發，不保證準點。
+
+實測曾發生：
+
+- 預期台灣 20:10
+- 實際 GitHub 約 22:06 才派發
+
+這不是 UTC+8 換算錯誤，因為：
+
+- `10 12 * * *` = UTC 12:10 = 台灣 20:10
+- 如果是台灣 22:10，cron 會是 `10 14 * * *`
+
+因此目前正式做法改為 cron-job.org 準時呼叫 GitHub API。
+
+## GitHub Actions 設定
+
+目前 workflow 只保留：
 
 ```text
-40 8 * * 1-5
+workflow_dispatch
 ```
 
-如果你想改成台灣時間早上 08:30：
+也就是：
+
+- 可以手動按 Run workflow
+- 可以由 cron-job.org 呼叫 GitHub API 觸發
+- 不再依賴 GitHub 內建 schedule
+
+## GitHub Secrets
+
+到：
 
 ```text
-30 0 * * 1-5
+Repository -> Settings -> Secrets and variables -> Actions
 ```
 
-如果你想改成台灣時間晚上 20:00：
-
-```text
-0 12 * * 1-5
-```
-
-## 你需要在 GitHub 設定的 Secrets
-
-到 GitHub repository：
-
-```text
-Settings -> Secrets and variables -> Actions -> New repository secret
-```
-
-至少需要：
+必要：
 
 ```text
 OPENAI_API_KEY
@@ -67,95 +78,169 @@ FINMIND_TOKEN
 NEWS_API_KEY
 ```
 
-建議也設定：
+建議：
 
 ```text
-OPENAI_MODEL=gpt-5
+OPENAI_MODEL
 SERPAPI_API_KEY
 BRAVE_SEARCH_API_KEY
 TAVILY_API_KEY
 ```
 
-搜尋 API 不是全部都必須，但至少有一個會比只靠 RSS 穩定。
-
-## Email 寄送設定
-
-如果使用 Gmail，請使用「應用程式密碼」，不要使用你的 Gmail 登入密碼。
-
-GitHub Secrets 範例：
+Email：
 
 ```text
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=你的 Gmail
-SMTP_PASSWORD=你的 Gmail 應用程式密碼
-SMTP_STARTTLS=true
-REPORT_EMAIL_FROM=你的 Gmail
-REPORT_EMAIL_TO=收報告的信箱
+SMTP_HOST
+SMTP_PORT
+SMTP_USER
+SMTP_PASSWORD
+SMTP_STARTTLS
+REPORT_EMAIL_FROM
+REPORT_EMAIL_TO
 ```
 
-如果你不用 Gmail，也可以用 SendGrid、Mailgun、Amazon SES、Outlook SMTP。
+Supabase：
+
+```text
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+UPDATE_SUPABASE
+SUPABASE_REQUIRED
+VALIDATE_PREDICTIONS
+```
+
+## cron-job.org 設定
+
+完整設定請看：
+
+```text
+CRON_JOB_ORG_SETUP.md
+```
+
+建議建立兩個 Job：
+
+- 每天 08:10 Asia/Taipei
+- 每天 20:10 Asia/Taipei
+
+HTTP Method：
+
+```text
+POST
+```
+
+URL：
+
+```text
+https://api.github.com/repos/Haoyuan543/ai-stock-tool/actions/workflows/daily-analysis.yml/dispatches
+```
+
+Body：
+
+```json
+{
+  "ref": "main",
+  "inputs": {
+    "symbol": "2603.TW",
+    "symbols": "",
+    "mode": "general",
+    "model": "",
+    "send_email": "true"
+  }
+}
+```
+
+成功時 GitHub API 會回：
+
+```text
+204 No Content
+```
 
 ## 手動測試
 
-推上 GitHub 後：
+GitHub：
 
-1. 打開 repository 的 `Actions`
-2. 選 `Daily AI Investment Analysis`
-3. 按 `Run workflow`
-4. symbol 填 `2603.TW`
-5. mode 選 `personalized`
-6. send_email 填 `true`
-
-跑完後可以在 workflow 頁面下載 `scheduled-analysis-report`。
-
-## 本機測試排程腳本
-
-不寄信，只產生報告：
-
-```bash
-SEND_EMAIL=false python -m backend.jobs.daily_analysis_email
+```text
+Actions -> Daily AI Investment Analysis -> Run workflow
 ```
 
-寄信：
+建議輸入：
 
-```bash
-python -m backend.jobs.daily_analysis_email --send-email
+```text
+symbol: 2603.TW
+mode: general
+send_email: true
 ```
 
-Windows PowerShell 範例：
+本機測試：
 
 ```powershell
 $env:SEND_EMAIL="false"
-.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email
+$env:UPDATE_SUPABASE="false"
+$env:UPDATE_GOOGLE_SHEET="false"
+.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbol 2603.TW --mode general --model gpt-5.5
 ```
 
-## 是否一定要 GitHub？
+## 成功後要看哪裡
 
-不一定。
+GitHub Actions 最新 run：
 
-最推薦順序：
+- Event 應該是 `workflow_dispatch`
+- `Print trigger diagnostics` 應顯示 `event_name=workflow_dispatch`
+- `taipei_time` 應接近 cron-job.org 設定時間
 
-1. **GitHub Actions**：最適合每日固定時間跑分析和寄信。
-2. **Render / Railway / Fly.io**：適合讓 Dashboard 24 小時在線。
-3. **Google Cloud Run + Cloud Scheduler**：正式產品化比較穩，但設定較多。
-4. **VPS**：彈性最大，但需要自己維護系統。
+Supabase：
 
-## GitHub Actions 的限制
+- `analysis_runs` 應新增一筆
+- `market_snapshots` 應新增股價快照
+- `prediction_validations` 會在到期時新增驗證資料
 
-- 它不是長時間在線伺服器。
-- 它適合「到時間跑一次、寄報告、結束」。
-- 免費額度和使用限制會依 GitHub 帳號方案變動。
-- 歷史紀錄若只存在 runner 機器，下一次不會自動保留；目前會用 artifact 保留每次輸出。
+Email：
 
-## 下一步建議
+- 應收到 HTML / Markdown 報告
+- 報告內會標示分析時間、股價資料日期、資料來源與資料限制
 
-最實用的下一步是把每日報告同步到雲端儲存：
+## 常見問題
 
-- Google Drive
-- Dropbox
-- S3 / Cloudflare R2
-- GitHub Pages
-- Supabase / PostgreSQL
+### GitHub 沒準時跑
 
-這樣才能做長期績效追蹤、7/30/90 天預測驗證、回測統計。
+如果 Event 是 `schedule`，代表你還在用 GitHub 內建排程。
+
+如果 Event 是 `workflow_dispatch`，但時間不準，請檢查 cron-job.org 的時區是不是 Asia/Taipei。
+
+### cron-job.org 顯示 401
+
+GitHub Token 錯誤或過期。
+
+### cron-job.org 顯示 403
+
+GitHub Token 權限不足。請確認 Actions 是 Read and write。
+
+### cron-job.org 顯示 404
+
+可能是 repository 權限、workflow 檔名、或 URL 錯誤。
+
+### 報告沒有寄出
+
+檢查：
+
+- SMTP secrets 是否完整
+- Gmail 是否使用應用程式密碼
+- `REPORT_EMAIL_FROM` 與 `SMTP_USER` 是否一致
+- `SEND_EMAIL` 是否為 `true`
+
+### Supabase 沒資料
+
+檢查：
+
+- `UPDATE_SUPABASE=true`
+- `SUPABASE_URL` 是否為 `https://...supabase.co`
+- `SUPABASE_SERVICE_ROLE_KEY` 是否填 Secret key，不是 Publishable key
+- `database/schema.sql` 是否已在 Supabase SQL Editor 執行成功
+
+## 目前限制
+
+- 股價多數情況是最近收盤價，不一定是即時盤中價
+- ETF 被動買盤仍是低權重搜尋推論，不能當精確持股變化
+- 公司公告 / 法說仍需交叉確認
+- 搜尋推論資料不會當成官方精確資料
+- 如果 OpenAI 沒成功，系統不會用本機模板假裝 AI 分析完成

@@ -5,23 +5,25 @@ FastAPI + OpenAI based investment research tool. Data is fetched only after the 
 ## Cloud Scheduled Reports
 
 This project now supports cloud scheduled analysis through GitHub Actions.
+For more accurate timing, use cron-job.org to trigger GitHub Actions through `workflow_dispatch`.
 
 - Workflow: `.github/workflows/daily-analysis.yml`
 - Job script: `backend/jobs/daily_analysis_email.py`
 - Full setup guide: `CLOUD_DEPLOYMENT.md`
+- cron-job.org setup: `CRON_JOB_ORG_SETUP.md`
 - Google Sheet setup: `GOOGLE_SHEETS_SETUP.md`
 - Supabase setup: `SUPABASE_SETUP.md`
 - Implementation plan: `PROJECT_EXECUTION_PLAN.md`
 - GitHub Project issue drafts: `GITHUB_PROJECT_TASKS.md`
 - Full user manual: `USER_MANUAL.md`
 
-Default cloud schedule:
+Default cloud trigger:
 
 ```text
-Monday to Friday, 16:40 Asia/Taipei
+cron-job.org calls GitHub workflow_dispatch at 08:10 and 20:10 Asia/Taipei.
 ```
 
-The scheduled job will:
+The cloud job will:
 
 - run the same AI analysis pipeline as the local tool
 - generate Markdown, HTML, and JSON reports
