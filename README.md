@@ -2,6 +2,10 @@
 
 FastAPI + OpenAI based investment research tool. Data is fetched only after the user clicks Analyze Now. The tool does not place orders and does not send notifications.
 
+## Collaboration Rule
+
+Codex must not push commits to GitHub unless the user explicitly asks Codex to push in that specific request. Local commits are allowed when requested or needed for review, but `git push` requires an explicit user instruction every time.
+
 ## Cloud Scheduled Reports
 
 This project now supports cloud scheduled analysis through GitHub Actions.
