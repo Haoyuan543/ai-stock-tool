@@ -106,6 +106,7 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
             data["red_sea_status"] = red_sea.get("status") if red_sea.get("status") != "unknown" else None
         if extracted:
             data["note"] = data.get("note", "") + " Web search intelligence was used for inferred context; exact values remain Data Missing unless explicitly extracted."
+        _downgrade_weak_search_route_exactness(data, missing)
 
     if _route_or_scfi_missing(data) or data.get("weekly_change") is None:
         data = apply_last_successful_freight_cache(symbol, data, missing)
@@ -132,6 +133,43 @@ def _needs_search_fallback(data: dict[str, Any]) -> bool:
 
 def _route_or_scfi_missing(data: dict[str, Any]) -> bool:
     return data.get("scfi_latest") is None or data.get("us_west") is None or data.get("us_east") is None or data.get("europe") is None
+
+
+def _route_value_count(data: dict[str, Any]) -> int:
+    return sum(1 for route in ("us_west", "us_east", "europe") if data.get(route) is not None)
+
+
+def _downgrade_weak_search_route_exactness(data: dict[str, Any], missing: list[str]) -> None:
+    """Avoid treating a single search-extracted route number as reliable exact data.
+
+    Public snippets often contain rounded boundaries, target ranges, or unrelated
+    freight examples. If search fallback finds only one main route, keep the
+    freight trend/intelligence but remove that route from exact-data fields so
+    the report does not overstate route coverage.
+    """
+
+    route_count = _route_value_count(data)
+    if route_count != 1:
+        return
+    route = next((name for name in ("us_west", "us_east", "europe") if data.get(name) is not None), "")
+    value = _safe_float(data.get(route))
+    suspicious_boundary = value is not None and value >= 5900
+    source_note = "search_single_route"
+    if suspicious_boundary:
+        source_note = "search_single_route_boundary_value"
+    data.setdefault("route_quality_warnings", []).append(
+        {
+            "route": route,
+            "value": value,
+            "reason": source_note,
+            "message": "搜尋 fallback 只取得單一航線數字，可信度不足；已降級為趨勢推論，不列為精確航線資料。",
+        }
+    )
+    data[route] = None
+    data[f"{route}_weekly_change"] = None
+    missing.append(
+        "Data Limitation: 搜尋 fallback 只取得單一航線數字，已降級為趨勢推論；需三大航線交叉確認或快取補齊。"
+    )
 
 
 def _freight_search_fallback(symbol: str) -> dict[str, Any]:

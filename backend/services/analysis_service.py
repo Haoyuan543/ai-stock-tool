@@ -3842,6 +3842,7 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
     flows = inst.get("flow_sums") or inst.get("flow_summary") or {}
     fundamentals = market.get("fundamentals") or {}
     latest_revenue = fundamentals.get("latest_monthly_revenue") or fundamentals.get("latest_month_revenue") or {}
+    dividend_rate = fundamentals.get("dividend_rate") or {}
     news = market.get("news") or {}
     news_relevance = market.get("news_relevance") or {}
     etf = market.get("etf_flow") or {}
@@ -3871,6 +3872,48 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 
     def pct(value: Any) -> str:
         return "資料不足" if value is None or value == "" else f"{fmt(value)}%"
+
+    def label(value: Any) -> str:
+        mapping = {
+            "up": "上升",
+            "down": "下降",
+            "flat": "持平",
+            "unknown": "資料不足",
+            "strong": "強",
+            "moderate": "中等",
+            "weak": "弱",
+            "risk_on": "風險偏好",
+            "risk_off": "風險趨避",
+            "neutral": "中性",
+            "bullish": "偏多",
+            "bearish": "偏空",
+            "inferred_bullish": "推論偏多",
+            "inferred_bearish": "推論偏空",
+            "stale_event_over_14_days": "事件超過 14 日",
+            "today_material_event": "今日重大事件",
+            "recent_event_within_7_days": "近 7 日事件",
+            "fetch_failed": "抓取失敗",
+        }
+        if value is None or value == "":
+            return "資料不足"
+        return mapping.get(str(value), str(value))
+
+    def route_quality(route: str) -> str:
+        warnings = freight.get("route_quality_warnings") or []
+        for warning in warnings:
+            if warning.get("route") == route:
+                return "搜尋單點已降級，需交叉確認"
+        cache_fields = set(freight.get("cache_filled_fields") or [])
+        if route in cache_fields or f"{route}_weekly_change" in cache_fields:
+            return "由快取補齊，請看快取日期"
+        if freight.get(route) is not None and freight.get(f"{route}_weekly_change") is not None:
+            return "本次取得"
+        if freight.get(route) is not None or freight.get(f"{route}_weekly_change") is not None:
+            return "半套資料，需交叉確認"
+        route_intel = (freight_intel.get(route) or {})
+        if route_intel.get("trend") and route_intel.get("trend") != "unknown":
+            return f"僅趨勢推論，信心 {fmt(route_intel.get('confidence'))}"
+        return "資料不足"
 
     def flow_line(key: str, label: str) -> str:
         row = flows.get(key) or {}
@@ -3923,6 +3966,7 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 
 - 本次股價、法人、運價、新聞與基本面資料狀態列於下方表格。
 - 三條主要航線若有數字，會直接列出數值與週變化，方便核對運價判斷。
+- 資料可信度：{fmt(scores.get("truthfulness_score") or truth.get("truthfulness_score"), 0)}/100；若低於 60，代表仍需人工複核資料限制，但不代表整份報告無效。
 - 搜尋推論、過期資料與仍需交叉確認的資料會在限制欄位標示，不會當成官方精確資料。
 
 ## 本次抓取資料核對表
@@ -3976,11 +4020,17 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 | 地中海線 | {fmt(freight.get("mediterranean"))} | - |
 | 亞洲區域線 | {fmt(freight.get("asia_regional"))} | - |
 
-- 運價方向：{freight_intel.get("overall_trend", "資料不足")}
-- 運價強度：{freight_intel.get("strength", "資料不足")}
+- 運價方向：{label(freight_intel.get("overall_trend"))}
+- 運價強度：{label(freight_intel.get("strength"))}
 - 運價信心：{fmt(freight_intel.get("confidence"))}
 - 來源數量：{fmt(freight_intel.get("source_count"), 0)}
 - 精確主要航線筆數：{fmt(freight_intel.get("exact_route_count"), 0)}
+
+| 航線 | 資料品質判定 |
+|---|---|
+| 美西線 | {route_quality("us_west")} |
+| 美東線 | {route_quality("us_east")} |
+| 歐洲線 | {route_quality("europe")} |
 
 ### 4. 法人籌碼
 
@@ -4005,9 +4055,11 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 | EPS | {fmt(fundamentals.get("eps"))} |
 | 本益比 | {fmt(fundamentals.get("per"))} |
 | 股價淨值比 | {fmt(fundamentals.get("pbr"))} |
-| 現金股利 | {fmt(fundamentals.get("cash_dividend"))} |
+| 現金股利 | {fmt(fundamentals.get("cash_dividend") or dividend_rate.get("CashEarningsDistribution"))} |
 | 股利殖利率 | {pct(fundamentals.get("dividend_yield"))} |
-| 除息日 | {fmt(fundamentals.get("ex_dividend_date"))} |
+| 除息日 | {fmt(fundamentals.get("ex_dividend_date") or dividend_rate.get("CashExDividendTradingDate"))} |
+| 股利發放日 | {fmt(dividend_rate.get("CashDividendPaymentDate"))} |
+| 股利公告日 | {fmt(dividend_rate.get("AnnouncementDate"))} |
 
 ### 6. 國際事件、市場環境與油價
 
@@ -4024,19 +4076,19 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 | WTI | {fmt(wti.get("date"))} | {fmt(wti.get("close"))} | {pct(wti.get("change_1d_pct"))} | {pct(wti.get("change_5d_pct"))} |
 | Brent | {fmt(brent.get("date"))} | {fmt(brent.get("close"))} | {pct(brent.get("change_1d_pct"))} | {pct(brent.get("change_5d_pct"))} |
 
-- 市場環境：{regime.get("market_regime", "資料不足")}，信心 {fmt(regime.get("confidence"))}
-- 台股：{regime.get("taiwan_market", "資料不足")}
-- 航運族群：{regime.get("shipping_sector", "資料不足")}
-- 美股：{regime.get("us_market", "資料不足")}
+- 市場環境：{label(regime.get("market_regime"))}，信心 {fmt(regime.get("confidence"))}
+- 台股：{label(regime.get("taiwan_market"))}
+- 航運族群：{label(regime.get("shipping_sector"))}
+- 美股：{label(regime.get("us_market"))}
 - 油價判讀：{oil.get("summary") or "資料不足"}
 
 ### 7. ETF、紅海與公告
 
 | 模組 | 結果 | 信心 | 備註 |
 |---|---|---:|---|
-| ETF 被動買盤 | {etf.get("etf_flow", "資料不足")} | {fmt(etf.get("confidence"))} | 持股變化 {fmt(etf.get("holding_change"))}；基金規模變化 {fmt(etf.get("aum_change"))}；資料日 {fmt(etf.get("as_of"))} |
-| 紅海 / 蘇伊士 | {red.get("status", "資料不足")} | {fmt(red.get("confidence"))} | 航運影響 {red.get("shipping_impact", "資料不足")}；蘇伊士回流風險 {red.get("suez_return_risk", "資料不足")} |
-| 公司公告 | {ann.get("latest_event", "資料不足")} | {fmt(ann.get("confidence"))} | 重大性 {ann.get("materiality", "資料不足")}；抓取失敗不可解讀為沒有公告 |
+| ETF 被動買盤 | {label(etf.get("etf_flow"))} | {fmt(etf.get("confidence"))} | 持股變化 {fmt(etf.get("holding_change"))}；基金規模變化 {fmt(etf.get("aum_change"))}；資料日 {fmt(etf.get("as_of"))} |
+| 紅海 / 蘇伊士 | {label(red.get("status"))} | {fmt(red.get("confidence"))} | 航運影響 {label(red.get("shipping_impact"))}；蘇伊士回流風險 {label(red.get("suez_return_risk"))} |
+| 公司公告 | {label(ann.get("latest_event"))} | {fmt(ann.get("confidence"))} | 重大性 {label(ann.get("materiality"))}；抓取失敗不可解讀為沒有公告 |
 
 ### 8. 高相關新聞
 
@@ -4051,7 +4103,7 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 | 估值分數 | {fmt(scores.get("valuation_score"), 0)} |
 | 風險分數 | {fmt(scores.get("risk_score"), 0)} |
 | 資料完整度 | {fmt(scores.get("data_coverage"), 0)} |
-| 真實性分數 | {fmt(scores.get("truthfulness_score") or truth.get("truthfulness_score"), 0)} |
+| 資料可信度 | {fmt(scores.get("truthfulness_score") or truth.get("truthfulness_score"), 0)} |
 | 總分 | {fmt(scores.get("overall_score"), 0)} |
 
 ### 10. 本次資料限制

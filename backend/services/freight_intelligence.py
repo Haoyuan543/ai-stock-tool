@@ -299,7 +299,7 @@ def _independent_sources(signals: list[dict[str, Any]]) -> set[str]:
 
 
 def _exact_route_available(freight: dict[str, Any], route: str) -> bool:
-    return _safe_float(freight.get(route)) is not None or _safe_float(freight.get(f"{route}_weekly_change")) is not None
+    return _safe_float(freight.get(route)) is not None and _safe_float(freight.get(f"{route}_weekly_change")) is not None
 
 
 def _dedupe_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
