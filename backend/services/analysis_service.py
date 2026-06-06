@@ -168,7 +168,14 @@ class AnalysisService:
             truthfulness,
             ai_result.get("openai_error", ""),
         )
-        final_report = self._compose_report(symbol, mode, prompt_payload, position_advice, action_plan, summary)
+        if ai_result["analysis_mode"] == "openai":
+            final_report = self._compose_report(symbol, mode, prompt_payload, position_advice, action_plan, summary)
+            final_report = self._prepend_engine_status(final_report, ai_result)
+        else:
+            final_report = self._compose_unavailable_report(symbol, mode, ai_result, payload, freshness, data_status, sources)
+            summary["market_state"] = "無法分析"
+            summary["action"] = "暫不提供操作建議"
+            summary["one_line"] = "OpenAI 未成功完成分析，系統不輸出本機模板投資結論，避免誤導。"
         clean_warnings = [self._user_message(item) for item in payload["missing"]]
 
         result = {
@@ -184,6 +191,7 @@ class AnalysisService:
             "market_data": market_data,
             "analysis_mode": ai_result["analysis_mode"],
             "openai_error": ai_result.get("openai_error", ""),
+            "engine_status": self._engine_status(ai_result),
             "summary": summary,
             "data_quality": data_quality,
             "truthfulness": truthfulness,
@@ -202,6 +210,129 @@ class AnalysisService:
         result["prediction_record"] = record_prediction(result)
         self._save_history(result)
         return result
+
+    def _engine_status(self, ai_result: dict[str, Any]) -> dict[str, Any]:
+        mode = ai_result.get("analysis_mode")
+        model = ai_result.get("model_used") or "gpt-5"
+        raw_error = str(ai_result.get("openai_error") or "").strip()
+        if mode == "openai":
+            return {
+                "status": "openai",
+                "label": "OpenAI 分析成功",
+                "model_used": model,
+                "reason": "",
+                "impact": "報告已使用 OpenAI 分析，並由系統整理成固定格式。",
+            }
+
+        reason = self._friendly_openai_error(raw_error)
+        return {
+            "status": "fallback",
+            "label": "OpenAI 未成功，本次使用本機規則備援",
+            "model_used": model,
+            "reason": reason,
+            "impact": "報告仍可參考即時資料與規則判斷，但語意推理、交叉解讀與投資論述品質會下降。",
+        }
+
+    def _friendly_openai_error(self, raw_error: str) -> str:
+        text = raw_error.lower()
+        if not raw_error:
+            return "未取得明確錯誤訊息，請查看 GitHub Actions 執行紀錄。"
+        if "timed out" in text or "timeout" in text or "read operation timed out" in text:
+            return "OpenAI 回應逾時，可能是模型回應時間過長、網路不穩或輸入內容太大。"
+        if "insufficient_quota" in text or "quota" in text or "billing" in text:
+            return "OpenAI 帳號額度不足，或付款 / Billing 尚未成功啟用。"
+        if "invalid_api_key" in text or "unauthorized" in text or "401" in text:
+            return "OpenAI API Key 無效、填錯，或 GitHub Secret 沒有正確讀取。"
+        if "model" in text and ("not found" in text or "does not exist" in text or "unsupported" in text):
+            return "OpenAI 模型名稱不正確，或你的帳號目前沒有該模型權限。"
+        if "rate limit" in text or "429" in text:
+            return "OpenAI 呼叫次數或速率受到限制，稍後重試或提高額度後再跑。"
+        return "OpenAI 呼叫失敗，詳細原因已記錄在 GitHub Actions 與資料庫欄位中。"
+
+    def _prepend_engine_status(self, report: str, ai_result: dict[str, Any]) -> str:
+        status = self._engine_status(ai_result)
+        if status["status"] == "openai":
+            block = f"""# 分析引擎狀態
+- AI 狀態：OpenAI 分析成功
+- 使用模型：{status["model_used"]}
+- 報告說明：{status["impact"]}
+
+"""
+        else:
+            block = f"""# 分析引擎狀態
+- AI 狀態：OpenAI 未成功，本次使用本機規則備援
+- 使用模型：{status["model_used"]}
+- 失敗原因：{status["reason"]}
+- 對報告的影響：{status["impact"]}
+
+"""
+        return block + (report or "")
+
+    def _compose_unavailable_report(
+        self,
+        symbol: str,
+        mode: str,
+        ai_result: dict[str, Any],
+        payload: dict[str, Any],
+        freshness: dict[str, Any],
+        data_status: dict[str, Any],
+        sources: list[dict[str, Any]],
+    ) -> str:
+        status = self._engine_status(ai_result)
+        missing = payload.get("missing") or []
+        source_lines = []
+        for source in sources[:12]:
+            name = source.get("name") or source.get("source") or "資料來源"
+            url = source.get("url") or ""
+            source_lines.append(f"- {name}{f'：{url}' if url else ''}")
+        if not source_lines:
+            source_lines = ["- 本次未取得可列示的資料來源。"]
+
+        missing_lines = [f"- {self._user_message(item)}" for item in missing[:10]]
+        if not missing_lines:
+            missing_lines = ["- 尚無額外資料缺口。"]
+
+        status_lines = [f"- {key}：{value}" for key, value in data_status.items()]
+
+        return f"""# 無法完成 AI 投資分析
+
+## 分析引擎狀態
+- AI 狀態：OpenAI 未成功，本次不產生投資結論
+- 使用模型：{status["model_used"]}
+- 失敗原因：{status["reason"]}
+- 對報告的影響：系統已停止輸出本機模板的多空判斷、買賣建議與分數，避免讓使用者誤以為這是完整 AI 分析。
+
+## 本次不提供的內容
+- 今日結論
+- 買進或賣出建議
+- 多空裁決
+- 信心分數
+- 個人化部位操作建議
+
+## 已完成的資料抓取狀態
+- 股票代號：{symbol}
+- 分析模式：{mode}
+- 分析時間：{freshness.get("analysis_time") or payload.get("timestamp")}
+- 股價資料日期：{freshness.get("price_data_date") or "資料不足"}
+- 是否即時股價：{"是" if freshness.get("is_realtime_price") else "否"}
+{chr(10).join(status_lines)}
+
+## 可以怎麼處理
+1. 到 GitHub Actions log 查看 `OpenAI analysis fallback` 後面的原因。
+2. 確認 GitHub Secret `OPENAI_API_KEY`、`OPENAI_MODEL` 是否正確。
+3. 若原因是逾時，可以改用較快模型或提高 `OPENAI_TIMEOUT_SECONDS`。
+4. 若原因是額度或 Billing，請到 OpenAI Platform 檢查 Usage / Billing。
+5. 修正後重新手動執行 GitHub Actions。
+
+## 本次資料缺口
+{chr(10).join(missing_lines)}
+
+## 資料來源
+{chr(10).join(source_lines)}
+
+## 免責聲明
+本次 OpenAI 未完成分析，因此系統不提供投資建議。以上僅列出資料抓取狀態與排錯方向。
+"""
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:
         if not HISTORY_FILE.exists():

@@ -9,20 +9,24 @@ import httpx
 from backend.config import get_settings
 
 
+DEFAULT_OPENAI_MODEL = "gpt-5"
+
+
 class AIAnalyzer:
     def __init__(self) -> None:
         self.settings = get_settings()
 
     def analyze(self, prompt: str, fallback_markdown: str, model: str | None = None) -> dict[str, Any]:
+        selected_model = (model or self.settings.openai_model or DEFAULT_OPENAI_MODEL).strip() or DEFAULT_OPENAI_MODEL
         if not self.settings.openai_api_key:
             return {
                 "markdown": fallback_markdown + "\n\n> Data Missing: OPENAI_API_KEY is not configured. Fallback mode was used.",
                 "analysis_mode": "fallback",
                 "openai_error": "OPENAI_API_KEY is not configured.",
+                "model_used": selected_model,
             }
 
         result_queue: Queue[dict[str, Any]] = Queue(maxsize=1)
-        selected_model = (model or self.settings.openai_model).strip() or self.settings.openai_model
         worker = Thread(target=self._call_openai, args=(prompt, fallback_markdown, result_queue, selected_model), daemon=True)
         worker.start()
         try:
@@ -34,6 +38,7 @@ class AIAnalyzer:
                 + f"\n\n> Data Missing: OpenAI API analysis timed out after {seconds} seconds. Fallback mode was used.",
                 "analysis_mode": "fallback",
                 "openai_error": f"OpenAI API analysis timed out after {seconds} seconds.",
+                "model_used": selected_model,
             }
 
     def _call_openai(self, prompt: str, fallback_markdown: str, result_queue: Queue[dict[str, Any]], model: str) -> None:

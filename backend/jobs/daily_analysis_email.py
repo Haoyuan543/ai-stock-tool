@@ -333,6 +333,13 @@ def run_one(
         model=model,
         manual_context=manual_context,
     )
+    if result.get("analysis_mode") == "openai":
+        print(f"OpenAI analysis succeeded: model={result.get('model_used') or '(default)'}")
+    else:
+        configured = bool(_env("OPENAI_API_KEY"))
+        selected_model = result.get("model_used") or model or _env("OPENAI_MODEL") or "(empty)"
+        error = (result.get("openai_error") or "unknown OpenAI failure").replace("\n", " ")[:500]
+        print(f"OpenAI analysis fallback: configured={configured}, model={selected_model}, error={error}")
     if _env("RUN_REPORT_AUDIT", "true").lower() in {"1", "true", "yes"}:
         result["report_audit"] = audit_report(result)
         audit = result["report_audit"]
