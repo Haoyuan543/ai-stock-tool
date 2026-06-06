@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import html
 import json
 import os
 import re
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCFI_CSV = ROOT / "data" / "scfi_routes.csv"
 SSE_SCFI_PAGE = "https://en.sse.net.cn/indices/scfinew.jsp"
 SSE_SCFI_CHART = "https://www.sse.net.cn/index/indexImg?name=scfi&type=english"
+SSE_SCFI_SINGLE_INDEX = "https://www.sse.net.cn/index/singleIndex?indexType=scfi"
 
 
 class FreightFetcher:
@@ -38,6 +40,7 @@ class FreightFetcher:
 def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dict[str, Any]:
     settings = get_settings()
     source = {"name": "Shanghai Shipping Exchange SCFI", "url": "https://www.sse.net.cn/indexIntro?indexName=scfi"}
+    single_index_source = {"name": "SSE SCFI single index official table", "url": SSE_SCFI_SINGLE_INDEX}
     chart_source = {"name": "SSE SCFI latest chart image", "url": SSE_SCFI_CHART}
     csv_source = {"name": "Local SCFI route CSV", "url": str(SCFI_CSV)}
     manual_source = {"name": "Manual freight supplement", "url": "frontend advanced freight fields"}
@@ -55,11 +58,33 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
     rows = FreightFetcher().fetch_route_rates()
     latest = rows[-1] if rows else {}
     data = _empty_data(page_available)
+    single_index = _fetch_sse_single_index(settings)
+    if single_index.get("data"):
+        sources.append(single_index_source)
+        data.update({key: value for key, value in single_index["data"].items() if value is not None})
+        page_available = True
+        data["note"] = "SSE official single-index table was parsed first. Route fields are used only when the official table contains exact numbers."
+    elif single_index.get("missing"):
+        missing.extend(single_index["missing"])
     if latest:
         sources.append(csv_source)
-        data.update(_row_to_data(latest))
+        csv_data = _row_to_data(latest)
+        csv_row_date = csv_data.get("latest_date")
+        if data.get("latest_date") and csv_data.get("latest_date"):
+            csv_data["official_latest_date"] = data.get("latest_date")
+        csv_filled_fields: list[str] = []
+        for key, value in csv_data.items():
+            if value is not None and data.get(key) is None:
+                data[key] = value
+                csv_filled_fields.append(key)
+        data["csv_filled_fields"] = csv_filled_fields
+        data["csv_row_date"] = csv_row_date
+        if csv_data.get("verified_route_source") and not data.get("verified_route_source"):
+            data["verified_route_source"] = csv_data.get("verified_route_source")
+        for field in ("history", "note"):
+            data[field] = data.get(field) or csv_data.get(field)
         data["history"] = rows[-26:]
-        data["note"] = "SCFI route data was loaded from local CSV. Empty cells are not guessed."
+        data["note"] = (data.get("note", "") + " SCFI route data may be supplemented from local CSV when still fresh. Empty cells are not guessed.").strip()
         _apply_csv_freshness_guard(data, missing)
     if data.get("scfi_latest") is None:
         official = _fetch_official_scfi_latest(settings)
@@ -174,35 +199,62 @@ def _age_days(value: Any) -> int | None:
     return max(0, (datetime.now(timezone.utc).date() - parsed).days)
 
 
-def _clear_csv_exact_fields(data: dict[str, Any]) -> None:
+def _date_after(left: Any, right: Any) -> bool:
+    left_date = _parse_date(left)
+    right_date = _parse_date(right)
+    return bool(left_date and right_date and left_date > right_date)
+
+
+def _clear_csv_exact_fields(data: dict[str, Any], fields: list[str] | None = None, keep_official_scfi: bool = False) -> None:
+    if fields is not None:
+        for field in fields:
+            if keep_official_scfi and field in {"scfi_latest", "weekly_change", "scfi_streak_weeks"}:
+                continue
+            data[field] = None
+        return
     for field in (
         "scfi_latest",
         "weekly_change",
         "scfi_streak_weeks",
+        "mediterranean",
+        "asia_regional",
+    ):
+        if keep_official_scfi and field in {"scfi_latest", "weekly_change", "scfi_streak_weeks"}:
+            continue
+        data[field] = None
+    for field in (
         "us_west",
         "us_west_weekly_change",
         "us_east",
         "us_east_weekly_change",
         "europe",
         "europe_weekly_change",
-        "mediterranean",
-        "asia_regional",
     ):
         data[field] = None
 
 
 def _apply_csv_freshness_guard(data: dict[str, Any], missing: list[str]) -> None:
-    age = _age_days(data.get("latest_date"))
+    csv_date = data.get("csv_row_date") or data.get("latest_date")
+    age = _age_days(csv_date)
     max_age = _csv_max_age_days()
-    data["csv_data_date"] = data.get("latest_date")
+    data["csv_data_date"] = csv_date
+    official_latest_date = data.get("official_latest_date")
     data["csv_age_days"] = age
     data["csv_max_age_days"] = max_age
-    data["csv_stale"] = age is None or age > max_age
-    data["csv_exact_used"] = not data["csv_stale"]
+    data["csv_stale"] = age is None or age > max_age or _date_after(official_latest_date, csv_date)
+    csv_filled_fields = data.get("csv_filled_fields") or []
+    data["csv_exact_used"] = (not data["csv_stale"]) and any(field in csv_filled_fields for field in {
+        "us_west",
+        "us_west_weekly_change",
+        "us_east",
+        "us_east_weekly_change",
+        "europe",
+        "europe_weekly_change",
+    })
     if not data["csv_stale"]:
         return
-    stale_date = data.get("latest_date") or "日期不明"
-    _clear_csv_exact_fields(data)
+    stale_date = csv_date or "日期不明"
+    _clear_csv_exact_fields(data, fields=list(csv_filled_fields), keep_official_scfi=bool(official_latest_date))
     data["csv_exact_used"] = False
     data["note"] = (
         data.get("note", "")
@@ -244,6 +296,99 @@ def _downgrade_weak_search_route_exactness(data: dict[str, Any], missing: list[s
     missing.append(
         "Data Limitation: 搜尋 fallback 只取得單一航線數字，已降級為趨勢推論；需三大航線交叉確認或快取補齊。"
     )
+
+
+def _fetch_sse_single_index(settings: Any) -> dict[str, Any]:
+    try:
+        response = httpx.get(
+            SSE_SCFI_SINGLE_INDEX,
+            timeout=settings.request_timeout,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.sse.net.cn/"},
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        return {"missing": [f"Data Limitation: SSE SCFI single-index official table fetch failed: {exc}"]}
+
+    data = _parse_sse_single_index_html(response.text)
+    if not data.get("scfi_latest"):
+        return {"missing": ["Data Limitation: SSE SCFI single-index official table did not expose parsable SCFI values."]}
+    data["official_single_index_used"] = True
+    data["official_latest_date"] = data.get("latest_date")
+    data["official_route_exact_used"] = _route_value_count(data) >= 2
+    data["verified_route_source"] = "SSE official single-index table" if _route_value_count(data) >= 2 else None
+    return {"data": data}
+
+
+def _parse_sse_single_index_html(text: str) -> dict[str, Any]:
+    rows = _html_table_rows(text)
+    data: dict[str, Any] = {
+        "scfi_latest": None,
+        "weekly_change": None,
+        "scfi_streak_weeks": None,
+        "us_west": None,
+        "us_west_weekly_change": None,
+        "us_east": None,
+        "us_east_weekly_change": None,
+        "europe": None,
+        "europe_weekly_change": None,
+        "latest_date": None,
+    }
+    for cells in rows:
+        joined = " ".join(cells)
+        if not cells:
+            continue
+        if "航线" in joined and "本期" in joined:
+            dates = re.findall(r"\d{4}-\d{2}-\d{2}", joined)
+            if dates:
+                data["latest_date"] = dates[-1]
+            continue
+        if "综合指数" in joined or "Comprehensive Index" in joined:
+            prev, current, _delta = _last_three_numbers(cells)
+            data["scfi_latest"] = current
+            if prev is not None and current is not None and prev:
+                data["weekly_change"] = round((current - prev) / prev * 100, 2)
+            continue
+        route = None
+        if "美西" in joined or "USWC" in joined:
+            route = "us_west"
+        elif "美东" in joined or "USEC" in joined:
+            route = "us_east"
+        elif "欧洲" in joined or "Europe" in joined:
+            route = "europe"
+        if route:
+            prev, current, _delta = _last_three_numbers(cells)
+            if current is not None:
+                data[route] = current
+            if prev is not None and current is not None and prev:
+                data[f"{route}_weekly_change"] = round((current - prev) / prev * 100, 2)
+    return data
+
+
+def _html_table_rows(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for row_match in re.finditer(r"<tr[\s\S]*?</tr>", text, flags=re.I):
+        row_html = row_match.group(0)
+        cells: list[str] = []
+        for cell_match in re.finditer(r"<t[dh][^>]*>([\s\S]*?)</t[dh]>", row_html, flags=re.I):
+            raw = cell_match.group(1)
+            clean = re.sub(r"<br\s*/?>", " ", raw, flags=re.I)
+            clean = re.sub(r"<[^>]+>", " ", clean)
+            clean = html.unescape(clean)
+            clean = re.sub(r"\s+", " ", clean).strip()
+            cells.append(clean)
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _last_three_numbers(cells: list[str]) -> tuple[float | None, float | None, float | None]:
+    values: list[float | None] = []
+    for cell in cells[-3:]:
+        values.append(_safe_float(cell))
+    while len(values) < 3:
+        values.insert(0, None)  # type: ignore[arg-type]
+    return values[-3], values[-2], values[-1]
 
 
 def _freight_search_fallback(symbol: str) -> dict[str, Any]:

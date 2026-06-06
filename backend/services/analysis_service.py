@@ -3907,9 +3907,13 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
         if route in cache_fields or f"{route}_weekly_change" in cache_fields:
             return f"Supabase / 本機快取補齊，資料日 {fmt(freight.get('cache_data_date'))}"
         if freight.get(route) is not None and freight.get(f"{route}_weekly_change") is not None:
+            if freight.get("official_route_exact_used"):
+                return f"SSE 官方單期頁本次公開資料取得，資料日 {fmt(freight.get('latest_date'))}"
             if freight.get("csv_exact_used"):
                 source = freight.get("verified_route_source") or "data/scfi_routes.csv"
                 return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}，來源 {source}"
+            if freight.get("search_intelligence"):
+                return "搜尋 / 公開頁本次抽取，需交叉確認"
             return "本次公開資料取得"
         if freight.get(route) is not None or freight.get(f"{route}_weekly_change") is not None:
             return "半套資料，需交叉確認"
