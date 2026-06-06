@@ -554,8 +554,13 @@ def _row_to_data(row: dict[str, Any]) -> dict[str, Any]:
         "mediterranean": _safe_float(row.get("mediterranean")),
         "asia_regional": _safe_float(row.get("asia_regional")),
         "weekly_change": _safe_float(row.get("weekly_change")),
+        "scfi_streak_weeks": _safe_float(row.get("scfi_streak_weeks")),
+        "us_west_weekly_change": _safe_float(row.get("us_west_weekly_change")),
+        "us_east_weekly_change": _safe_float(row.get("us_east_weekly_change")),
+        "europe_weekly_change": _safe_float(row.get("europe_weekly_change")),
         "monthly_change": _safe_float(row.get("monthly_change")),
         "latest_date": row.get("date"),
+        "verified_route_source": row.get("source") or "data/scfi_routes.csv",
     }
 
 

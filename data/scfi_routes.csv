@@ -1,1 +1,2 @@
-date,scfi,us_west,us_east,europe,mediterranean,asia_regional,weekly_change,monthly_change
+date,scfi,weekly_change,scfi_streak_weeks,us_west,us_west_weekly_change,us_east,us_east_weekly_change,europe,europe_weekly_change,mediterranean,asia_regional,monthly_change,source
+2026-06-05,2726.48,6.01,6,4552,9.71,5741,7.65,2605,5.20,,,,verified_public_freight_sources
