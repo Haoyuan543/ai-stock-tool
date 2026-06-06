@@ -180,6 +180,7 @@ class AnalysisService:
             summary["market_state"] = "無法分析"
             summary["action"] = "暫不提供操作建議"
             summary["one_line"] = "OpenAI 未成功完成分析，系統不輸出本機模板投資結論，避免誤導。"
+        final_report = self._enforce_freight_report_consistency(final_report, prompt_payload)
         final_report = self._sanitize_report_language(final_report)
         clean_warnings = [self._user_message(item) for item in payload["missing"]]
 
@@ -280,11 +281,44 @@ class AnalysisService:
             "Data Warning": "資料提醒",
             "Market Regime": "市場環境",
             "ETF Flow": "ETF 被動買盤",
+            "Freight Intelligence": "運價情報",
+            "Conviction Score": "信心分數",
             "stale_event_over_14_days": "事件超過 14 日",
             "holding_change": "持股變化",
             "AUM_change": "基金規模變化",
             "jsonl": "歷史紀錄",
             "python -m": "命令列驗證",
+            "exact_data": "精確資料",
+            "search_inferred": "搜尋推論",
+        }
+        cleaned = report or ""
+        for old, new in replacements.items():
+            cleaned = cleaned.replace(old, new)
+        return cleaned
+
+    def _enforce_freight_report_consistency(self, report: str, payload: dict[str, Any]) -> str:
+        freight = ((payload.get("market_data") or {}).get("freight") or {})
+        main_routes_complete = all(
+            freight.get(route) is not None and freight.get(f"{route}_weekly_change") is not None
+            for route in ("us_west", "us_east", "europe")
+        )
+        if not main_routes_complete:
+            return report or ""
+
+        route_evidence = (
+            f"三條主要航線已取得精確數字與週變化："
+            f"美西線 {self._fmt(freight.get('us_west'))}，週變化 {self._fmt(freight.get('us_west_weekly_change'))}%；"
+            f"美東線 {self._fmt(freight.get('us_east'))}，週變化 {self._fmt(freight.get('us_east_weekly_change'))}%；"
+            f"歐洲線 {self._fmt(freight.get('europe'))}，週變化 {self._fmt(freight.get('europe_weekly_change'))}%。"
+        )
+        replacements = {
+            "但細分航線資料並不完整，不能把所有航線都視為同樣強勢": route_evidence,
+            "但細分航線資料不完整，不能把所有航線都視為同樣強勢": route_evidence,
+            "部分航線仍不足": "三條主要航線皆有精確數字與週變化",
+            "細分航線精確數字仍不足": route_evidence,
+            "主要航線精確數字仍不足": route_evidence,
+            "航線資料不足": "三條主要航線已取得",
+            "航線資料不完整": "三條主要航線已取得",
         }
         cleaned = report or ""
         for old, new in replacements.items():
