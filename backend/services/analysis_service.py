@@ -4025,6 +4025,8 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 - 運價信心：{fmt(freight_intel.get("confidence"))}
 - 來源數量：{fmt(freight_intel.get("source_count"), 0)}
 - 精確主要航線筆數：{fmt(freight_intel.get("exact_route_count"), 0)}
+- CSV 資料日期：{fmt(freight.get("csv_data_date"))}
+- CSV 是否過期：{"是" if freight.get("csv_stale") else "否" if freight.get("csv_stale") is False else "未使用 CSV"}
 
 | 航線 | 資料品質判定 |
 |---|---|

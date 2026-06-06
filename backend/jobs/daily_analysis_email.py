@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import os
@@ -138,13 +139,47 @@ def save_outputs(result: dict[str, Any]) -> dict[str, Path]:
     markdown_path = base.with_suffix(".md")
     html_path = base.with_suffix(".html")
     json_path = base.with_suffix(".json")
+    freight_csv_path = base.with_name(f"{base.name}_freight_routes.csv")
 
     markdown = (result.get("report_markdown") or result.get("ai_report") or "") + scheduled_footer(result)
     title = build_subject(result)
     markdown_path.write_text(markdown, encoding="utf-8")
     html_path.write_text(markdown_to_html(markdown, title), encoding="utf-8")
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"markdown": markdown_path, "html": html_path, "json": json_path}
+    _write_freight_routes_csv(result, freight_csv_path)
+    return {"markdown": markdown_path, "html": html_path, "json": json_path, "freight_csv": freight_csv_path}
+
+
+def _write_freight_routes_csv(result: dict[str, Any], path: Path) -> None:
+    freight = ((result.get("market_data") or {}).get("freight") or {})
+    intel = freight.get("intelligence") or {}
+    row = {
+        "analysis_time": result.get("timestamp"),
+        "symbol": result.get("symbol"),
+        "data_date": freight.get("latest_date"),
+        "scfi": freight.get("scfi_latest"),
+        "weekly_change": freight.get("weekly_change"),
+        "scfi_streak_weeks": freight.get("scfi_streak_weeks"),
+        "us_west": freight.get("us_west"),
+        "us_west_weekly_change": freight.get("us_west_weekly_change"),
+        "us_east": freight.get("us_east"),
+        "us_east_weekly_change": freight.get("us_east_weekly_change"),
+        "europe": freight.get("europe"),
+        "europe_weekly_change": freight.get("europe_weekly_change"),
+        "exact_route_count": intel.get("exact_route_count"),
+        "freight_trend": intel.get("overall_trend"),
+        "freight_strength": intel.get("strength"),
+        "freight_confidence": intel.get("confidence"),
+        "source": freight.get("verified_route_source") or freight.get("cache_source") or "runtime_fetch",
+        "csv_data_date": freight.get("csv_data_date"),
+        "csv_stale": freight.get("csv_stale"),
+        "cache_used": freight.get("cache_used"),
+        "cache_data_date": freight.get("cache_data_date"),
+    }
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(row.keys()))
+        writer.writeheader()
+        writer.writerow(row)
 
 
 def send_email(result: dict[str, Any], files: dict[str, Path]) -> bool:
@@ -173,7 +208,12 @@ def send_email(result: dict[str, Any], files: dict[str, Path]) -> bool:
     for label, path in files.items():
         if label == "json":
             continue
-        maintype, subtype = ("text", "html") if path.suffix == ".html" else ("text", "markdown")
+        if path.suffix == ".html":
+            maintype, subtype = ("text", "html")
+        elif path.suffix == ".csv":
+            maintype, subtype = ("text", "csv")
+        else:
+            maintype, subtype = ("text", "markdown")
         msg.add_attachment(
             path.read_bytes(),
             maintype=maintype,

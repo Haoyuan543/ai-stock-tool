@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import csv
 import json
+import os
 import re
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +60,7 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
         data.update(_row_to_data(latest))
         data["history"] = rows[-26:]
         data["note"] = "SCFI route data was loaded from local CSV. Empty cells are not guessed."
+        _apply_csv_freshness_guard(data, missing)
     if data.get("scfi_latest") is None:
         official = _fetch_official_scfi_latest(settings)
         if official.get("scfi_latest") is not None:
@@ -137,6 +140,75 @@ def _route_or_scfi_missing(data: dict[str, Any]) -> bool:
 
 def _route_value_count(data: dict[str, Any]) -> int:
     return sum(1 for route in ("us_west", "us_east", "europe") if data.get(route) is not None)
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _csv_max_age_days() -> int:
+    try:
+        return int(_env("SCFI_CSV_MAX_AGE_DAYS", "7") or "7")
+    except ValueError:
+        return 7
+
+
+def _parse_date(value: Any) -> date | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except Exception:
+        return None
+
+
+def _age_days(value: Any) -> int | None:
+    parsed = _parse_date(value)
+    if not parsed:
+        return None
+    return max(0, (datetime.now(timezone.utc).date() - parsed).days)
+
+
+def _clear_csv_exact_fields(data: dict[str, Any]) -> None:
+    for field in (
+        "scfi_latest",
+        "weekly_change",
+        "scfi_streak_weeks",
+        "us_west",
+        "us_west_weekly_change",
+        "us_east",
+        "us_east_weekly_change",
+        "europe",
+        "europe_weekly_change",
+        "mediterranean",
+        "asia_regional",
+    ):
+        data[field] = None
+
+
+def _apply_csv_freshness_guard(data: dict[str, Any], missing: list[str]) -> None:
+    age = _age_days(data.get("latest_date"))
+    max_age = _csv_max_age_days()
+    data["csv_data_date"] = data.get("latest_date")
+    data["csv_age_days"] = age
+    data["csv_max_age_days"] = max_age
+    data["csv_stale"] = age is None or age > max_age
+    if not data["csv_stale"]:
+        return
+    stale_date = data.get("latest_date") or "日期不明"
+    _clear_csv_exact_fields(data)
+    data["note"] = (
+        data.get("note", "")
+        + f" CSV route data date {stale_date} is stale or invalid, so it was not used as exact current freight data."
+    )
+    missing.append(
+        f"Data Limitation: data/scfi_routes.csv 日期 {stale_date} 已超過可用期限或無法判讀，未列為本次精確航線資料。"
+    )
 
 
 def _downgrade_weak_search_route_exactness(data: dict[str, Any], missing: list[str]) -> None:
