@@ -42,7 +42,9 @@ def extract_market_intelligence(results: list[dict[str, Any]]) -> dict[str, Any]
         return _normalize(_loads_json_object(text))
     except Exception as exc:
         data = _rule_based_extract(results)
-        data["evidence_type"]["missing_data"].append(f"OpenAI web extraction failed: {exc}")
+        data["evidence_type"]["missing_data"].append(
+            f"AI-assisted web extraction was not usable; rule-based search fallback was used. Reason: {_short_extraction_error(exc)}"
+        )
         return data
 
 
@@ -170,8 +172,39 @@ def _extract_output_text(data: dict[str, Any]) -> str:
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.I).strip()
+        text = re.sub(r"```$", "", text).strip()
     try:
         return json.loads(text)
     except Exception:
         match = re.search(r"\{.*\}", text, flags=re.S)
-        return json.loads(match.group(0)) if match else {}
+        if not match:
+            return {}
+        candidate = _repair_json_candidate(match.group(0))
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return {}
+
+
+def _repair_json_candidate(text: str) -> str:
+    candidate = text.strip()
+    candidate = re.sub(r",(\s*[}\]])", r"\1", candidate)
+    open_braces = candidate.count("{") - candidate.count("}")
+    open_brackets = candidate.count("[") - candidate.count("]")
+    if open_brackets > 0:
+        candidate += "]" * open_brackets
+    if open_braces > 0:
+        candidate += "}" * open_braces
+    return candidate
+
+
+def _short_extraction_error(exc: Exception) -> str:
+    text = str(exc)
+    if "Expecting" in text or "delimiter" in text or "json" in text.lower():
+        return "structured response was invalid"
+    if "timed out" in text.lower() or "timeout" in text.lower():
+        return "request timed out"
+    return "remote extraction failed"

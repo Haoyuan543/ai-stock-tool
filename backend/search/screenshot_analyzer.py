@@ -26,9 +26,9 @@ def analyze_search_result_screenshots(results: list[dict[str, Any]], max_pages: 
             "missing": ["Data Missing: Playwright is not installed; webpage screenshot analysis is disabled."],
         }
 
-    candidates = [row for row in results if _is_http_url(row.get("url"))][:max_pages]
+    candidates = [row for row in results if _is_http_url(row.get("url")) and _is_screenshot_useful(row.get("url"))][:max_pages]
     if not candidates:
-        return {"extracted": None, "screenshots": [], "missing": ["Data Missing: no screenshot-capable web URLs found."]}
+        return {"extracted": None, "screenshots": [], "missing": []}
 
     screenshots: list[dict[str, Any]] = []
     missing: list[str] = []
@@ -44,10 +44,11 @@ def analyze_search_result_screenshots(results: list[dict[str, Any]], max_pages: 
                 page.wait_for_timeout(1500)
                 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
                 path = SCREENSHOT_DIR / f"search_result_{index}.png"
-                page.screenshot(path=str(path), full_page=False)
+                page.screenshot(path=str(path), full_page=False, timeout=min(page_timeout_ms, 8000))
                 screenshots.append({"url": row["url"], "title": row.get("title"), "path": str(path)})
             except Exception as exc:
-                missing.append(f"Data Limitation: screenshot failed for {row.get('url')}: {exc}")
+                reason = _short_screenshot_error(exc)
+                missing.append(f"Data Limitation: screenshot backup skipped for {row.get('url')}: {reason}")
         browser.close()
 
     extracted = extract_from_screenshots(screenshots)
@@ -58,7 +59,7 @@ def analyze_search_result_screenshots(results: list[dict[str, Any]], max_pages: 
 def extract_from_screenshots(screenshots: list[dict[str, Any]]) -> dict[str, Any]:
     settings = get_settings()
     if not screenshots:
-        return {"data": None, "missing": ["Data Limitation: no screenshots were captured."]}
+        return {"data": None, "missing": []}
     if not settings.openai_api_key:
         return {"data": None, "missing": ["Data Missing: OPENAI_API_KEY is required for screenshot extraction."]}
 
@@ -89,13 +90,47 @@ def extract_from_screenshots(screenshots: list[dict[str, Any]]) -> dict[str, Any
         )
         response.raise_for_status()
         text = _extract_output_text(response.json())
-        return {"data": _loads_json_object(text), "missing": []}
+        parsed = _loads_json_object(text)
+        if parsed:
+            return {"data": parsed, "missing": []}
+        return {"data": None, "missing": ["Data Limitation: screenshot backup produced no reliable structured freight data."]}
     except Exception as exc:
-        return {"data": None, "missing": [f"Data Warning: OpenAI screenshot extraction failed: {exc}"]}
+        return {"data": None, "missing": [f"Data Warning: OpenAI screenshot extraction was skipped: {_short_openai_error(exc)}"]}
 
 
 def _is_http_url(url: str | None) -> bool:
     return bool(url and url.startswith(("http://", "https://")))
+
+
+def _is_screenshot_useful(url: str | None) -> bool:
+    if not url:
+        return False
+    lowered = url.lower()
+    noisy_paths = (
+        "fqaennew.jsp",
+        "faq",
+        "about",
+        "contact",
+    )
+    return not any(path in lowered for path in noisy_paths)
+
+
+def _short_screenshot_error(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "font" in text or "timeout" in text:
+        return "page did not become screenshot-ready within the time limit"
+    if "net::" in text:
+        return "page network load failed"
+    return "page screenshot was not reliable enough"
+
+
+def _short_openai_error(exc: Exception) -> str:
+    text = str(exc)
+    if "Expecting" in text or "delimiter" in text or "json" in text.lower():
+        return "image extraction returned an invalid structured format"
+    if "timed out" in text.lower() or "timeout" in text.lower():
+        return "image extraction timed out"
+    return "image extraction failed"
 
 
 def _extract_output_text(data: dict[str, Any]) -> str:
@@ -111,8 +146,30 @@ def _extract_output_text(data: dict[str, Any]) -> str:
 
 
 def _loads_json_object(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.I).strip()
+        text = re.sub(r"```$", "", text).strip()
     try:
         return json.loads(text)
     except Exception:
         match = re.search(r"\{.*\}", text, flags=re.S)
-        return json.loads(match.group(0)) if match else {}
+        if not match:
+            return {}
+        candidate = _repair_json_candidate(match.group(0))
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return {}
+
+
+def _repair_json_candidate(text: str) -> str:
+    candidate = text.strip()
+    candidate = re.sub(r",(\s*[}\]])", r"\1", candidate)
+    open_braces = candidate.count("{") - candidate.count("}")
+    open_brackets = candidate.count("[") - candidate.count("]")
+    if open_brackets > 0:
+        candidate += "]" * open_brackets
+    if open_braces > 0:
+        candidate += "}" * open_braces
+    return candidate

@@ -3965,6 +3965,29 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 
     missing_lines = [f"- {self._user_message(item)}" for item in missing[:12]] or ["- 無核心資料缺漏。"]
 
+    official_single_status = "已讀取，取得 SCFI 綜合指數、資料日期與週變化" if freight.get("official_single_index_used") else "未讀取成功"
+    official_route_status = (
+        "已從官方頁取得主要航線精確數字"
+        if freight.get("official_route_exact_used")
+        else "官方頁本次未公開可解析的主要航線數字，改用其他已標示來源"
+    )
+    csv_status = (
+        f"已使用，資料日 {fmt(freight.get('csv_data_date'))}，來源 {freight.get('verified_route_source') or 'data/scfi_routes.csv'}"
+        if freight.get("csv_exact_used")
+        else "未使用或已過期"
+    )
+    search_status = "已執行，作為趨勢與交叉確認" if freight.get("search_intelligence") else "未使用或沒有可用結果"
+    screenshot_status = (
+        f"已擷取 {len(freight.get('search_screenshots') or [])} 張，僅作備援"
+        if freight.get("search_screenshots")
+        else "未使用；文字解析與結構化資料已足夠，或頁面不適合截圖"
+    )
+    cache_status = (
+        f"已使用，資料日 {fmt(freight.get('cache_data_date'))}"
+        if freight.get("cache_used")
+        else "未使用"
+    )
+
     return f"""
 
 ---
@@ -4040,6 +4063,17 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 | 美西線 | {route_quality("us_west")} |
 | 美東線 | {route_quality("us_east")} |
 | 歐洲線 | {route_quality("europe")} |
+
+#### 本次運價網頁讀取狀態
+
+| 來源 / 方法 | 是否讀取 | 本次讀到什麼 | 報告如何使用 |
+|---|---|---|---|
+| SSE 官方單期頁 | {"成功" if freight.get("official_single_index_used") else "未成功"} | {official_single_status} | 作為 SCFI 綜合指數與資料日期的官方來源 |
+| SSE 官方主要航線 | {"成功" if freight.get("official_route_exact_used") else "未取得"} | {official_route_status} | 若官方頁未提供航線數字，不會假裝是官方資料 |
+| CSV 備援航線資料 | {"成功" if freight.get("csv_exact_used") else "未使用"} | {csv_status} | 補齊美西、美東、歐洲線數字，並在航線品質表標示 CSV 來源 |
+| 搜尋 / 公開網頁交叉確認 | {"有使用" if freight.get("search_intelligence") else "未使用"} | {search_status} | 只作方向、趨勢與背景，不當成官方精確數字 |
+| Playwright 截圖備援 | {"有截圖" if freight.get("search_screenshots") else "未截圖"} | {screenshot_status} | 只有文字抓不到時才作備援；失敗不影響主資料 |
+| Supabase / 本機快取 | {"有使用" if freight.get("cache_used") else "未使用"} | {cache_status} | 只在官方 / CSV / 搜尋不足時補位 |
 
 ### 4. 法人籌碼
 

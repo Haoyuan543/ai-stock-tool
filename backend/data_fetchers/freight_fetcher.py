@@ -104,10 +104,10 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
         search = _freight_search_fallback(symbol)
         sources.extend(search.get("sources", []))
         missing.extend(search.get("missing", []))
-        data["search_intelligence"] = search.get("extracted")
         data["page_extracts"] = search.get("page_extracts", [])
         data["search_screenshots"] = search.get("screenshots", [])
-        extracted = search.get("extracted") or {}
+        extracted = _sanitize_search_intelligence(search.get("extracted") or {}, data)
+        data["search_intelligence"] = extracted
         route_rates = extracted.get("route_rates") or {}
         if data.get("us_west") is None:
             data["us_west"] = _safe_float(route_rates.get("us_west"))
@@ -418,6 +418,69 @@ def _freight_search_fallback(symbol: str) -> dict[str, Any]:
         "screenshots": (screenshot or {}).get("screenshots", []),
         "extracted": extracted,
     }
+
+
+def _sanitize_search_intelligence(extracted: dict[str, Any], accepted: dict[str, Any]) -> dict[str, Any]:
+    if not extracted:
+        return extracted
+    cleaned = json.loads(json.dumps(extracted))
+    scfi = cleaned.get("scfi") or {}
+    search_scfi = _safe_float(scfi.get("latest_value"))
+    accepted_scfi = _safe_float(accepted.get("scfi_latest"))
+    if search_scfi is not None and accepted_scfi is not None and _materially_different(search_scfi, accepted_scfi, tolerance_pct=3.0):
+        scfi["latest_value"] = None
+        evidence = cleaned.setdefault("evidence_type", {})
+        evidence["exact_data"] = [
+            item for item in evidence.get("exact_data", []) or []
+            if "SCFI latest" not in str(item)
+        ]
+        evidence.setdefault("missing_data", []).append(
+            f"Search-extracted SCFI value conflicted with official SSE value {accepted_scfi}; it was ignored."
+        )
+        cleaned["scfi"] = scfi
+
+    route_rates = cleaned.get("route_rates") or {}
+    route_weekly = cleaned.get("route_weekly_change") or {}
+    for route in ("us_west", "us_east", "europe"):
+        accepted_rate = _safe_float(accepted.get(route))
+        search_rate = _safe_float(route_rates.get(route))
+        if accepted_rate is not None and search_rate is not None and _materially_different(search_rate, accepted_rate, tolerance_pct=5.0):
+            route_rates[route] = None
+            _remove_route_evidence(cleaned, route)
+            cleaned.setdefault("evidence_type", {}).setdefault("missing_data", []).append(
+                f"Search-extracted {route} rate conflicted with accepted route data {accepted_rate}; it was ignored."
+            )
+
+        accepted_change = _safe_float(accepted.get(f"{route}_weekly_change"))
+        search_change = _safe_float(route_weekly.get(route))
+        if accepted_change is not None and search_change is not None and abs(search_change - accepted_change) > 3.0:
+            route_weekly[route] = None
+            _remove_route_evidence(cleaned, route)
+            cleaned.setdefault("evidence_type", {}).setdefault("missing_data", []).append(
+                f"Search-extracted {route} weekly change conflicted with accepted route data {accepted_change}; it was ignored."
+            )
+    cleaned["route_rates"] = route_rates
+    cleaned["route_weekly_change"] = route_weekly
+    return cleaned
+
+
+def _materially_different(left: float, right: float, tolerance_pct: float) -> bool:
+    if right == 0:
+        return abs(left - right) > tolerance_pct
+    return abs(left - right) / abs(right) * 100 > tolerance_pct
+
+
+def _remove_route_evidence(cleaned: dict[str, Any], route: str) -> None:
+    labels = {
+        "us_west": ("US West", "美西"),
+        "us_east": ("US East", "美東"),
+        "europe": ("Europe", "歐洲"),
+    }.get(route, (route,))
+    evidence = cleaned.setdefault("evidence_type", {})
+    evidence["exact_data"] = [
+        item for item in evidence.get("exact_data", []) or []
+        if not any(label in str(item) for label in labels)
+    ]
 
 
 def _extract_scfi_numbers_from_news(results: list[dict[str, Any]]) -> dict[str, Any]:
