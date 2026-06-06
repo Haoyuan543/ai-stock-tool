@@ -18,6 +18,8 @@ GitHub runner 適合「排程執行」，不適合「直接在上面開發」。
 - GitHub Actions 每天 08:10 / 20:10 自動跑分析
 - Email 報告寄送
 - Markdown / HTML / JSON 報告輸出
+- 每次排程產生 batch summary artifact
+- 每檔報告附加排程自我審查結果
 - OpenAI / FinMind / News / SCFI / Freight Intelligence / ETF 推論 / 市場環境 / 國際事件整合
 
 ## Milestone 1：Google Sheet 自動更新

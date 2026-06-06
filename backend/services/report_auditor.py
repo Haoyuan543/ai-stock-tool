@@ -26,6 +26,13 @@ def _report(result: dict[str, Any]) -> str:
     return result.get("report_markdown") or result.get("ai_report") or ""
 
 
+def _is_aggressive_action(action: str) -> bool:
+    conservative_phrases = ["不積極", "警戒", "觀察", "等待", "不追", "不動"]
+    if any(phrase in action for phrase in conservative_phrases):
+        return False
+    return any(phrase in action for phrase in ["追", "積極買", "大幅加碼", "積極", "大幅", "加碼"])
+
+
 def audit_report(result: dict[str, Any]) -> dict[str, Any]:
     scores = _score(result)
     summary = result.get("summary") or {}
@@ -46,11 +53,11 @@ def audit_report(result: dict[str, Any]) -> dict[str, Any]:
         failed_rules.append("overall_score_verdict_mismatch")
         warnings.append("綜合分數低於 65，卻出現偏強多方結論。")
 
-    if timing < 50 and any(word in action for word in ["追", "積極買", "大幅加碼"]):
+    if timing < 50 and _is_aggressive_action(action):
         failed_rules.append("timing_action_mismatch")
         warnings.append("時機分數低於 50，不應建議追價或積極加碼。")
 
-    if risk < 50 and any(word in action for word in ["積極", "大幅", "加碼"]):
+    if risk < 50 and _is_aggressive_action(action):
         failed_rules.append("risk_action_mismatch")
         warnings.append("風險分數低於 50，不應給積極操作建議。")
 
@@ -107,4 +114,3 @@ def _recommended_changes(failed_rules: list[str]) -> list[str]:
         "report_too_short": "補充實際證據、資料來源與分數拆解。",
     }
     return [mapping[rule] for rule in failed_rules if rule in mapping]
-

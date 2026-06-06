@@ -104,6 +104,24 @@ def markdown_to_html(markdown: str, title: str) -> str:
 """
 
 
+def scheduled_footer(result: dict[str, Any]) -> str:
+    audit = result.get("report_audit") or {}
+    if not audit:
+        return ""
+    warnings = audit.get("audit_warnings") or []
+    warning_text = "\n".join(f"- {item}" for item in warnings[:8]) if warnings else "- 未發現重大格式或邏輯問題。"
+    return f"""
+
+## 排程自我審查
+- Audit Score：{audit.get("audit_score")}
+- Needs Revision：{audit.get("needs_revision")}
+- Failed Rules：{", ".join(audit.get("failed_rules") or []) or "無"}
+
+### 審查提醒
+{warning_text}
+"""
+
+
 def build_subject(result: dict[str, Any]) -> str:
     summary = result.get("summary") or {}
     state = summary.get("market_state") or "分析完成"
@@ -121,7 +139,7 @@ def save_outputs(result: dict[str, Any]) -> dict[str, Path]:
     html_path = base.with_suffix(".html")
     json_path = base.with_suffix(".json")
 
-    markdown = result.get("report_markdown") or result.get("ai_report") or ""
+    markdown = (result.get("report_markdown") or result.get("ai_report") or "") + scheduled_footer(result)
     title = build_subject(result)
     markdown_path.write_text(markdown, encoding="utf-8")
     html_path.write_text(markdown_to_html(markdown, title), encoding="utf-8")
@@ -186,7 +204,64 @@ def _email_settings() -> tuple[str, int, str, str, str, list[str]]:
     return smtp_host, smtp_port, smtp_user, smtp_password, sender, recipients
 
 
-def send_batch_email(items: list[dict[str, Any]]) -> bool:
+def batch_summary_markdown(items: list[dict[str, Any]], validations: list[dict[str, Any]] | None = None) -> str:
+    validations = validations or []
+    successful = [item for item in items if item.get("result")]
+    failed = [item for item in items if item.get("error")]
+    needs_revision = [
+        item
+        for item in successful
+        if ((item.get("result") or {}).get("report_audit") or {}).get("needs_revision")
+    ]
+    lines = [
+        "# 每日 AI 投資分析批次摘要",
+        "",
+        f"- 成功：{len(successful)} 檔",
+        f"- 失敗：{len(failed)} 檔",
+        f"- 需要人工複核：{len(needs_revision)} 檔",
+        f"- 本次新增績效驗證：{len(validations)} 筆",
+        "",
+        "## 個股摘要",
+    ]
+    for item in successful:
+        result = item["result"]
+        summary = result.get("summary") or {}
+        audit = result.get("report_audit") or {}
+        lines.extend(
+            [
+                f"### {result.get('symbol')}",
+                f"- 今日結論：{summary.get('market_state', '')}",
+                f"- 今日動作：{summary.get('action', '')}",
+                f"- 一句話：{summary.get('one_line', '')}",
+                f"- Audit Score：{audit.get('audit_score')}",
+                f"- Needs Revision：{audit.get('needs_revision')}",
+                "",
+            ]
+        )
+    if failed:
+        lines.append("## 失敗項目")
+        for item in failed:
+            lines.extend([f"### {item.get('symbol')}", f"- 錯誤：{item.get('error')}", ""])
+    if validations:
+        lines.append("## 本次績效驗證")
+        for item in validations[:20]:
+            lines.append(
+                f"- {item.get('symbol')} {item.get('horizon')}："
+                f"報酬 {item.get('actual_return')}，最大回撤 {item.get('max_drawdown')}，正確 {item.get('correct')}"
+            )
+    return "\n".join(lines)
+
+
+def save_batch_summary(items: list[dict[str, Any]], validations: list[dict[str, Any]] | None = None) -> Path:
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+    path = REPORT_DIR / f"{stamp}_batch_summary.md"
+    path.write_text(batch_summary_markdown(items, validations), encoding="utf-8")
+    print(f"Batch summary saved: {path}")
+    return path
+
+
+def send_batch_email(items: list[dict[str, Any]], validations: list[dict[str, Any]] | None = None) -> bool:
     smtp_host, smtp_port, smtp_user, smtp_password, sender, recipients = _email_settings()
     if not smtp_host or not sender or not recipients:
         print("Batch email skipped: SMTP_HOST, REPORT_EMAIL_FROM/SMTP_USER, or REPORT_EMAIL_TO is not configured.")
@@ -198,25 +273,7 @@ def send_batch_email(items: list[dict[str, Any]]) -> bool:
     if failed:
         subject += f"，{len(failed)} 檔失敗"
 
-    lines = ["# 每日 AI 投資分析批次報告", ""]
-    for item in successful:
-        result = item["result"]
-        summary = result.get("summary") or {}
-        lines.extend(
-            [
-                f"## {result.get('symbol')}",
-                f"- 今日結論：{summary.get('market_state', '')}",
-                f"- 今日動作：{summary.get('action', '')}",
-                f"- 一句話：{summary.get('one_line', '')}",
-                f"- 買進建議：{summary.get('buy_advice', '')}",
-                f"- 賣出建議：{summary.get('sell_advice', '')}",
-                "",
-            ]
-        )
-    for item in failed:
-        lines.extend([f"## {item.get('symbol')} 失敗", f"- 錯誤：{item.get('error')}", ""])
-
-    markdown = "\n".join(lines)
+    markdown = batch_summary_markdown(items, validations)
     html_body = markdown_to_html(markdown, subject)
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -309,15 +366,15 @@ def run_many(symbols: list[str], mode: str, model: str, manual_context: str, sen
             print(f"Analysis failed for {symbol}: {exc}")
             items.append({"symbol": symbol, "result": None, "files": {}, "error": str(exc)})
 
+    if not any(item.get("result") for item in items):
+        raise RuntimeError("All scheduled analyses failed.")
+    validations = validate_due_predictions()
+    save_batch_summary(items, validations)
     if send:
         if len(items) == 1 and items[0].get("result"):
             send_email(items[0]["result"], items[0]["files"])
         else:
-            send_batch_email(items)
-
-    if not any(item.get("result") for item in items):
-        raise RuntimeError("All scheduled analyses failed.")
-    validate_due_predictions()
+            send_batch_email(items, validations)
     return items
 
 

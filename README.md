@@ -13,6 +13,7 @@ This project now supports cloud scheduled analysis through GitHub Actions.
 - Supabase setup: `SUPABASE_SETUP.md`
 - Implementation plan: `PROJECT_EXECUTION_PLAN.md`
 - GitHub Project issue drafts: `GITHUB_PROJECT_TASKS.md`
+- Full user manual: `USER_MANUAL.md`
 
 Default cloud schedule:
 
@@ -24,6 +25,8 @@ The scheduled job will:
 
 - run the same AI analysis pipeline as the local tool
 - generate Markdown, HTML, and JSON reports
+- generate a batch summary artifact
+- append report audit results to each scheduled report
 - upload the report as a GitHub Actions artifact
 - email the report when SMTP secrets are configured
 
