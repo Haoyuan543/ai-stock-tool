@@ -70,6 +70,16 @@ def _max_cache_days() -> int:
         return 21
 
 
+def _route_count(freight: dict[str, Any]) -> int:
+    return sum(1 for field in ("us_west", "us_east", "europe") if not _is_missing(freight.get(field)))
+
+
+def _same_day(left: Any, right: Any) -> bool:
+    if not left or not right:
+        return False
+    return str(left)[:10] == str(right)[:10]
+
+
 def _cache_payload(record: dict[str, Any]) -> dict[str, Any]:
     raw = record.get("freight_json") or record.get("raw_json") or {}
     if isinstance(raw, str):
@@ -160,6 +170,8 @@ def _best_cache_row(symbol: str) -> dict[str, Any]:
         valid,
         key=lambda row: (
             str(row.get("data_date") or (row.get("_freight") or {}).get("latest_date") or ""),
+            _route_count(row.get("_freight") or {}),
+            1 if not _is_missing((row.get("_freight") or {}).get("scfi_latest")) else 0,
             str(row.get("fetched_at") or ""),
         ),
         reverse=True,
@@ -172,8 +184,17 @@ def apply_last_successful_freight_cache(symbol: str, data: dict[str, Any], missi
         return data
     cached = cache_row.get("_freight") or _cache_payload(cache_row)
     filled: list[str] = []
+    current_route_count = _route_count(data)
+    cached_route_count = _route_count(cached)
+    same_data_date = _same_day(data.get("latest_date"), cache_row.get("data_date") or cached.get("latest_date"))
     for field in FREIGHT_FIELDS:
-        if _is_missing(data.get(field)) and not _is_missing(cached.get(field)):
+        can_replace_partial_route = (
+            field in {"us_west", "us_west_weekly_change", "us_east", "us_east_weekly_change", "europe", "europe_weekly_change"}
+            and same_data_date
+            and current_route_count < 3
+            and cached_route_count >= 2
+        )
+        if (_is_missing(data.get(field)) or can_replace_partial_route) and not _is_missing(cached.get(field)):
             data[field] = cached.get(field)
             filled.append(field)
     if not filled:
@@ -199,10 +220,14 @@ def apply_last_successful_freight_cache(symbol: str, data: dict[str, Any], missi
 def build_freight_cache_row(symbol: str, freight: dict[str, Any], analysis_time: str | None = None) -> dict[str, Any] | None:
     if not freight:
         return None
-    has_value = any(not _is_missing(freight.get(field)) for field in ("scfi_latest", "us_west", "us_east", "europe"))
+    route_count = _route_count(freight)
+    has_value = not _is_missing(freight.get("scfi_latest")) or route_count >= 2
     if not has_value:
         return None
     freight_json = {field: freight.get(field) for field in FREIGHT_FIELDS if field in freight}
+    if 0 < route_count < 2:
+        for field in ("us_west", "us_west_weekly_change", "us_east", "us_east_weekly_change", "europe", "europe_weekly_change"):
+            freight_json[field] = None
     freight_json.update(
         {
             "intelligence": freight.get("intelligence"),
@@ -221,12 +246,12 @@ def build_freight_cache_row(symbol: str, freight: dict[str, Any], analysis_time:
         "scfi_latest": freight.get("scfi_latest"),
         "weekly_change": freight.get("weekly_change"),
         "scfi_streak_weeks": freight.get("scfi_streak_weeks"),
-        "us_west": freight.get("us_west"),
-        "us_west_weekly_change": freight.get("us_west_weekly_change"),
-        "us_east": freight.get("us_east"),
-        "us_east_weekly_change": freight.get("us_east_weekly_change"),
-        "europe": freight.get("europe"),
-        "europe_weekly_change": freight.get("europe_weekly_change"),
+        "us_west": freight.get("us_west") if route_count >= 2 else None,
+        "us_west_weekly_change": freight.get("us_west_weekly_change") if route_count >= 2 else None,
+        "us_east": freight.get("us_east") if route_count >= 2 else None,
+        "us_east_weekly_change": freight.get("us_east_weekly_change") if route_count >= 2 else None,
+        "europe": freight.get("europe") if route_count >= 2 else None,
+        "europe_weekly_change": freight.get("europe_weekly_change") if route_count >= 2 else None,
         "source": "analysis_success",
         "freight_json": freight_json,
     }

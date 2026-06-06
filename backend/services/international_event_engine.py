@@ -12,6 +12,8 @@ from backend.search.web_search import web_search
 
 
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 STOOQ_QUOTE = "https://stooq.com/q/l/"
 QUERIES = [
     "US tariff policy shipping trade latest",
@@ -79,15 +81,25 @@ def _fetch_oil_series(yahoo_symbol: str, stooq_symbol: str, name: str, missing: 
 
 
 def _fetch_yahoo_series(symbol: str, name: str) -> dict[str, Any] | None:
-    try:
-        encoded = quote(symbol, safe="")
-        response = httpx.get(YAHOO_CHART.format(symbol=encoded), params={"range": "1mo", "interval": "1d"}, timeout=8.0)
-        response.raise_for_status()
-        result = response.json()["chart"]["result"][0]
-        timestamps = result.get("timestamp") or []
-        closes = (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
-    except Exception:
+    result = None
+    encoded = quote(symbol, safe="")
+    for host in YAHOO_HOSTS:
+        try:
+            response = httpx.get(
+                f"https://{host}/v8/finance/chart/{encoded}",
+                params={"range": "1mo", "interval": "1d"},
+                headers=HEADERS,
+                timeout=httpx.Timeout(30.0, connect=15.0, read=30.0, write=15.0, pool=15.0),
+            )
+            response.raise_for_status()
+            result = response.json()["chart"]["result"][0]
+            break
+        except Exception:
+            result = None
+    if not result:
         return None
+    timestamps = result.get("timestamp") or []
+    closes = (result.get("indicators", {}).get("quote") or [{}])[0].get("close") or []
 
     rows: list[tuple[str, float]] = []
     for timestamp, close in zip(timestamps, closes):
@@ -110,8 +122,10 @@ def _fetch_yahoo_series(symbol: str, name: str) -> dict[str, Any] | None:
 
 def _fetch_stooq_quote(symbol: str, name: str) -> dict[str, Any] | None:
     try:
-        response = httpx.get(STOOQ_QUOTE, params={"s": symbol, "f": "sd2t2ohlcv", "h": "", "e": "csv"}, timeout=8.0)
+        response = httpx.get(STOOQ_QUOTE, params={"s": symbol, "f": "sd2t2ohlcv", "h": "", "e": "csv"}, headers=HEADERS, timeout=20.0)
         response.raise_for_status()
+        if "<html" in response.text.lower():
+            return None
         rows = list(csv.DictReader(StringIO(response.text)))
     except Exception:
         return None

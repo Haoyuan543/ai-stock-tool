@@ -180,6 +180,7 @@ class AnalysisService:
             summary["market_state"] = "無法分析"
             summary["action"] = "暫不提供操作建議"
             summary["one_line"] = "OpenAI 未成功完成分析，系統不輸出本機模板投資結論，避免誤導。"
+        final_report = self._sanitize_report_language(final_report)
         clean_warnings = [self._user_message(item) for item in payload["missing"]]
 
         result = {
@@ -271,6 +272,24 @@ class AnalysisService:
 
 """
         return block + (report or "")
+
+    def _sanitize_report_language(self, report: str) -> str:
+        replacements = {
+            "Data Missing": "資料不足",
+            "Data Limitation": "資料限制",
+            "Data Warning": "資料提醒",
+            "Market Regime": "市場環境",
+            "ETF Flow": "ETF 被動買盤",
+            "stale_event_over_14_days": "事件超過 14 日",
+            "holding_change": "持股變化",
+            "AUM_change": "基金規模變化",
+            "jsonl": "歷史紀錄",
+            "python -m": "命令列驗證",
+        }
+        cleaned = report or ""
+        for old, new in replacements.items():
+            cleaned = cleaned.replace(old, new)
+        return cleaned
 
     def _compose_unavailable_report(
         self,

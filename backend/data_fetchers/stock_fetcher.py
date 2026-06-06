@@ -7,6 +7,9 @@ import httpx
 
 from backend.config import get_settings
 
+YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
 
 def _safe_float(value: Any) -> float | None:
     try:
@@ -95,13 +98,10 @@ def fetch_stock_data(symbol: str) -> dict[str, Any]:
     sources = [{"name": "Yahoo Finance", "url": f"https://finance.yahoo.com/quote/{symbol}"}]
     missing: list[str] = []
     status = "ok"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     params = {"range": "6mo", "interval": "1d"}
 
     try:
-        response = httpx.get(url, params=params, timeout=20.0)
-        response.raise_for_status()
-        result = response.json()["chart"]["result"][0]
+        result = _fetch_yahoo_chart(symbol, params, settings)
         timestamps = result.get("timestamp") or []
         quote = result["indicators"]["quote"][0]
         meta = result.get("meta", {})
@@ -205,12 +205,23 @@ def _fetch_finmind_stock(symbol: str, settings: Any) -> dict[str, Any]:
     params = {"dataset": "TaiwanStockPrice", "data_id": stock_id, "start_date": "2025-01-01"}
     if settings.finmind_token:
         params["token"] = settings.finmind_token
-    try:
-        response = httpx.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=settings.request_timeout)
-        response.raise_for_status()
-        rows = response.json().get("data") or []
-    except Exception as exc:
-        return {"status": "missing", "data": {}, "sources": sources, "missing": [f"Data Missing: FinMind stock fallback failed: {exc}"]}
+    last_error: Exception | None = None
+    rows: list[dict[str, Any]] = []
+    for _ in range(3):
+        try:
+            response = httpx.get(
+                "https://api.finmindtrade.com/api/v4/data",
+                params=params,
+                headers=HEADERS,
+                timeout=httpx.Timeout(settings.request_timeout, connect=15.0, read=settings.request_timeout, write=15.0, pool=15.0),
+            )
+            response.raise_for_status()
+            rows = response.json().get("data") or []
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+    if not rows and last_error:
+        return {"status": "missing", "data": {}, "sources": sources, "missing": [f"Data Missing: FinMind stock fallback failed: {last_error}"]}
     bars = []
     for row in rows[-130:]:
         close = _safe_float(row.get("close"))
@@ -315,3 +326,25 @@ def _fetch_twse_realtime(symbol: str) -> dict[str, Any] | None:
             "channel": channel,
         }
     return None
+
+
+def _fetch_yahoo_chart(symbol: str, params: dict[str, str], settings: Any) -> dict[str, Any]:
+    errors: list[str] = []
+    encoded_symbol = symbol
+    for host in YAHOO_HOSTS:
+        url = f"https://{host}/v8/finance/chart/{encoded_symbol}"
+        for _ in range(2):
+            try:
+                response = httpx.get(
+                    url,
+                    params=params,
+                    headers=HEADERS,
+                    timeout=httpx.Timeout(settings.request_timeout, connect=15.0, read=settings.request_timeout, write=15.0, pool=15.0),
+                )
+                response.raise_for_status()
+                result = response.json()["chart"]["result"][0]
+                if result:
+                    return result
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{host}: {exc}")
+    raise RuntimeError("Yahoo Finance chart fetch failed after retries: " + " | ".join(errors[-3:]))

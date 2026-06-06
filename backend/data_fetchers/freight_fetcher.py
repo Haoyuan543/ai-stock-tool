@@ -142,7 +142,7 @@ def _freight_search_fallback(symbol: str) -> dict[str, Any]:
         extracted = merge_extractions(extracted, news_numbers)
     page_extract = None
     if _extraction_needs_page_extract(extracted):
-        page_extract = extract_pages_with_browser(search.get("results", []), max_pages=1)
+        page_extract = extract_pages_with_browser(search.get("results", []), max_pages=3)
         page_numbers = _extract_scfi_numbers_from_pages((page_extract or {}).get("pages", []))
         if page_numbers:
             extracted = merge_extractions(extracted, page_numbers)
@@ -150,7 +150,7 @@ def _freight_search_fallback(symbol: str) -> dict[str, Any]:
             extracted = merge_extractions(extracted, page_extract["extracted"])
     screenshot = None
     if _extraction_needs_screenshots(extracted):
-        screenshot = analyze_search_result_screenshots(search.get("results", []), max_pages=1)
+        screenshot = analyze_search_result_screenshots(search.get("results", []), max_pages=3)
         if screenshot.get("extracted"):
             extracted = merge_extractions(extracted, screenshot["extracted"])
     return {
