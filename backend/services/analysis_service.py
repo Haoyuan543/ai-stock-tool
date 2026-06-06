@@ -169,8 +169,11 @@ class AnalysisService:
             ai_result.get("openai_error", ""),
         )
         if ai_result["analysis_mode"] == "openai":
-            final_report = self._compose_report(symbol, mode, prompt_payload, position_advice, action_plan, summary)
+            final_report = (ai_result.get("markdown") or "").strip()
+            if not final_report:
+                final_report = self._compose_report(symbol, mode, prompt_payload, position_advice, action_plan, summary)
             final_report = self._prepend_engine_status(final_report, ai_result)
+            final_report += self._compose_evidence_appendix(prompt_payload)
         else:
             final_report = self._compose_unavailable_report(symbol, mode, ai_result, payload, freshness, data_status, sources)
             summary["market_state"] = "無法分析"
@@ -332,6 +335,143 @@ class AnalysisService:
 
 ## 免責聲明
 本次 OpenAI 未完成分析，因此系統不提供投資建議。以上僅列出資料抓取狀態與排錯方向。
+"""
+
+    def _compose_evidence_appendix(self, payload: dict[str, Any]) -> str:
+        market = payload.get("market_data") or {}
+        stock = market.get("stock") or {}
+        freight = market.get("freight") or {}
+        freight_intel = market.get("freight_intelligence") or freight.get("intelligence") or {}
+        institutional = market.get("institutional") or {}
+        fundamentals = market.get("fundamentals") or {}
+        etf = market.get("etf_flow") or {}
+        red_sea = market.get("red_sea_intelligence") or market.get("red_sea") or {}
+        regime = market.get("market_regime") or {}
+        intl = market.get("international_events") or {}
+        freshness = payload.get("data_freshness") or {}
+        scores = (payload.get("local_scores") or {}).get("revised_score") or {}
+        truth = payload.get("truthfulness") or {}
+
+        def val(value: Any, suffix: str = "") -> str:
+            if value is None or value == "":
+                return "資料不足"
+            if isinstance(value, float):
+                text = f"{value:.2f}".rstrip("0").rstrip(".")
+            else:
+                text = str(value)
+            return f"{text}{suffix}"
+
+        def trend(value: Any) -> str:
+            mapping = {
+                "up": "上升",
+                "down": "下降",
+                "flat": "持平",
+                "unknown": "資料不足",
+                "bullish": "偏多",
+                "bearish": "偏空",
+                "neutral": "中性",
+                "risk_on": "風險偏好",
+                "risk_off": "風險趨避",
+                "inferred_bullish": "推論偏多",
+                "inferred_bearish": "推論偏空",
+                "escalating": "升溫",
+                "stable": "穩定",
+                "improving": "改善",
+                "normalizing": "正常化",
+            }
+            return mapping.get(str(value), val(value))
+
+        latest_inst = institutional.get("latest") or {}
+        flow = institutional.get("flow_sums") or {}
+        technical = stock.get("technical") or {}
+        oil = (intl.get("oil_prices") or {})
+        wti = oil.get("wti") or {}
+        brent = oil.get("brent") or {}
+        sources = payload.get("sources") or []
+        source_lines = []
+        for source in sources[:14]:
+            name = source.get("name") or source.get("source") or "資料來源"
+            url = source.get("url") or ""
+            source_lines.append(f"- {name}{f'：{url}' if url else ''}")
+        if not source_lines:
+            source_lines = ["- 本次沒有可列示的資料來源。"]
+
+        warnings = [self._user_message(item) for item in payload.get("missing", [])[:12]]
+        warning_lines = [f"- {item}" for item in warnings] or ["- 尚無主要資料缺口。"]
+
+        return f"""
+
+---
+
+## 事實依據摘要
+
+### 資料新鮮度
+- 分析時間：{val(freshness.get("analysis_time") or payload.get("timestamp"))}
+- 股價資料日期：{val(freshness.get("price_data_date"))}
+- 是否即時股價：{"是" if freshness.get("is_realtime_price") else "否"}
+- 是否收盤資料：{"是" if freshness.get("is_closing_price") else "否"}
+- 新鮮度提醒：{val(freshness.get("warning"))}
+
+### 股價與技術面
+- 收盤 / 最新價：{val(stock.get("close"))}
+- 成交量：{val(stock.get("volume"))}
+- 20 日均線：{val(stock.get("ma20"))}
+- 60 日均線：{val(stock.get("ma60"))}
+- RSI：{val(technical.get("rsi14"))}
+- MACD：{val(technical.get("macd"))}
+- 20 日支撐：{val(stock.get("support_20d"))}
+- 20 日壓力：{val(stock.get("resistance_20d"))}
+
+### 運價與航運景氣
+- SCFI 最新值：{val(freight.get("scfi_latest"))}
+- SCFI 週變化：{val(freight.get("weekly_change"), "%")}
+- SCFI 連續週數：{val(freight.get("scfi_streak_weeks"))}
+- 美西線運價：{val(freight.get("us_west"))}
+- 美西線週變化：{val(freight.get("us_west_weekly_change"), "%")}
+- 美東線運價：{val(freight.get("us_east"))}
+- 歐洲線運價：{val(freight.get("europe"))}
+- 運價方向推論：{trend(freight_intel.get("overall_trend"))}
+- 運價強度：{trend(freight_intel.get("strength"))}
+- 運價信心：{val(freight_intel.get("confidence"))}
+- 來源數量：{val(freight_intel.get("source_count"))}
+
+### 法人籌碼
+- 最新日期：{val(latest_inst.get("date"))}
+- 外資：{val(latest_inst.get("foreign"))}
+- 投信：{val(latest_inst.get("trust"))}
+- 自營商：{val(latest_inst.get("dealer"))}
+- 三大法人合計：{val(latest_inst.get("total"))}
+- 外資 1 / 3 / 5 / 10 日：{val((flow.get("foreign") or {}).get("1d"))} / {val((flow.get("foreign") or {}).get("3d"))} / {val((flow.get("foreign") or {}).get("5d"))} / {val((flow.get("foreign") or {}).get("10d"))}
+- 投信 1 / 3 / 5 / 10 日：{val((flow.get("trust") or {}).get("1d"))} / {val((flow.get("trust") or {}).get("3d"))} / {val((flow.get("trust") or {}).get("5d"))} / {val((flow.get("trust") or {}).get("10d"))}
+
+### 基本面
+- EPS：{val(fundamentals.get("eps"))}
+- 本益比：{val(fundamentals.get("per"))}
+- 股價淨值比：{val(fundamentals.get("pbr"))}
+- 股利殖利率：{val(fundamentals.get("dividend_yield"), "%")}
+- 月營收年增率：{val(fundamentals.get("monthly_revenue_yoy"), "%")}
+
+### 事件與風險
+- ETF 被動買盤：{trend(etf.get("etf_flow"))}，信心 {val(etf.get("confidence"))}
+- 紅海 / 蘇伊士狀態：{trend(red_sea.get("status"))}，航運影響 {trend(red_sea.get("shipping_impact"))}，信心 {val(red_sea.get("confidence"))}
+- 市場環境：{trend(regime.get("market_regime"))}，台股 {trend(regime.get("taiwan_market"))}，航運類股 {trend(regime.get("shipping_sector"))}，信心 {val(regime.get("confidence"))}
+- WTI 油價：{val(wti.get("close"))}，近 5 日變化 {val(wti.get("change_5d_pct"), "%")}
+- Brent 油價：{val(brent.get("close"))}，近 5 日變化 {val(brent.get("change_5d_pct"), "%")}
+
+### 系統交叉檢查分數
+- 方向分數：{val(scores.get("direction_score"))}
+- 時機分數：{val(scores.get("timing_score"))}
+- 估值分數：{val(scores.get("valuation_score"))}
+- 風險分數：{val(scores.get("risk_score"))}
+- 資料覆蓋率：{val(scores.get("data_coverage"), "%")}
+- 資料可信度：{val(scores.get("truthfulness_score") or truth.get("truthfulness_score"))}/100
+- 綜合分數：{val(scores.get("overall_score"))}
+
+### 資料限制
+{chr(10).join(warning_lines)}
+
+### 資料來源
+{chr(10).join(source_lines)}
 """
 
     def history(self, limit: int = 20) -> list[dict[str, Any]]:

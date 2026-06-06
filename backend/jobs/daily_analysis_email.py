@@ -167,8 +167,8 @@ def send_email(result: dict[str, Any], files: dict[str, Path]) -> bool:
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
-    msg.set_content(markdown)
-    msg.add_alternative(html_body, subtype="html")
+    msg.set_content(markdown, charset="utf-8")
+    msg.add_alternative(html_body, subtype="html", charset="utf-8")
 
     for label, path in files.items():
         if label == "json":
@@ -279,8 +279,8 @@ def send_batch_email(items: list[dict[str, Any]], validations: list[dict[str, An
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
-    msg.set_content(markdown)
-    msg.add_alternative(html_body, subtype="html")
+    msg.set_content(markdown, charset="utf-8")
+    msg.add_alternative(html_body, subtype="html", charset="utf-8")
 
     for item in successful:
         files = item.get("files") or {}
@@ -301,6 +301,85 @@ def send_batch_email(items: list[dict[str, Any]], validations: list[dict[str, An
 
     print(f"Batch email sent to {', '.join(recipients)}")
     return True
+
+
+def scheduled_footer(result: dict[str, Any]) -> str:
+    audit = result.get("report_audit") or {}
+    if not audit:
+        return ""
+    warnings = audit.get("audit_warnings") or []
+    warning_text = "\n".join(f"- {item}" for item in warnings[:8]) if warnings else "- 未發現需要修正的報告品質問題。"
+    failed_rules = ", ".join(audit.get("failed_rules") or []) or "無"
+    return f"""
+
+## 自我審查
+- 審查分數：{audit.get("audit_score")}
+- 是否需要修正：{audit.get("needs_revision")}
+- 觸發規則：{failed_rules}
+
+### 審查提醒
+{warning_text}
+"""
+
+
+def build_subject(result: dict[str, Any]) -> str:
+    summary = result.get("summary") or {}
+    state = summary.get("market_state") or "未完成"
+    action = summary.get("action") or "請查看報告"
+    symbol = result.get("symbol") or ""
+    mode = result.get("mode") or ""
+    engine = "OpenAI" if result.get("analysis_mode") == "openai" else "未完成"
+    return f"AI 投資分析報告：{symbol}｜{state}｜{action}｜{mode}｜{engine}".strip()
+
+
+def batch_summary_markdown(items: list[dict[str, Any]], validations: list[dict[str, Any]] | None = None) -> str:
+    validations = validations or []
+    successful = [item for item in items if item.get("result")]
+    failed = [item for item in items if item.get("error")]
+    needs_revision = [
+        item
+        for item in successful
+        if ((item.get("result") or {}).get("report_audit") or {}).get("needs_revision")
+    ]
+    lines = [
+        "# 每日 AI 投資分析批次摘要",
+        "",
+        f"- 成功：{len(successful)} 檔",
+        f"- 失敗：{len(failed)} 檔",
+        f"- 需要人工複查：{len(needs_revision)} 檔",
+        f"- 預測驗證筆數：{len(validations)} 筆",
+        "",
+        "## 分析結果",
+    ]
+    for item in successful:
+        result = item["result"]
+        summary = result.get("summary") or {}
+        audit = result.get("report_audit") or {}
+        lines.extend(
+            [
+                f"### {result.get('symbol')}",
+                f"- 模式：{result.get('mode')}",
+                f"- 分析引擎：{result.get('analysis_mode')}",
+                f"- 市場狀態：{summary.get('market_state', '')}",
+                f"- 今日動作：{summary.get('action', '')}",
+                f"- 一句話：{summary.get('one_line', '')}",
+                f"- 審查分數：{audit.get('audit_score')}",
+                f"- 是否需要修正：{audit.get('needs_revision')}",
+                "",
+            ]
+        )
+    if failed:
+        lines.append("## 失敗項目")
+        for item in failed:
+            lines.extend([f"### {item.get('symbol')}", f"- 錯誤：{item.get('error')}", ""])
+    if validations:
+        lines.append("## 預測驗證")
+        for item in validations[:20]:
+            lines.append(
+                f"- {item.get('symbol')} {item.get('horizon')}："
+                f"實際報酬 {item.get('actual_return')}，最大回撤 {item.get('max_drawdown')}，判斷正確 {item.get('correct')}"
+            )
+    return "\n".join(lines)
 
 
 def update_google_sheet(result: dict[str, Any], files: dict[str, Path]) -> bool:
