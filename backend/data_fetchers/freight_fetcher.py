@@ -7,6 +7,7 @@ import json
 import os
 import re
 from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from backend.search.search_queries import freight_queries
 from backend.search.screenshot_analyzer import analyze_search_result_screenshots
 from backend.search.web_search import web_search
 from backend.services.freight_cache import apply_last_successful_freight_cache
+from backend.services.freight_route_store import latest_route_row_from_supabase, upsert_route_row_to_supabase
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +45,7 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
     single_index_source = {"name": "SSE SCFI single index official table", "url": SSE_SCFI_SINGLE_INDEX}
     chart_source = {"name": "SSE SCFI latest chart image", "url": SSE_SCFI_CHART}
     csv_source = {"name": "Local SCFI route CSV", "url": str(SCFI_CSV)}
+    supabase_route_source = {"name": "Supabase freight_routes", "url": "Supabase table: freight_routes"}
     manual_source = {"name": "Manual freight supplement", "url": "frontend advanced freight fields"}
     sources = [source]
     missing: list[str] = []
@@ -56,6 +59,9 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
         missing.append(f"Data Missing: SCFI public page fetch failed: {exc}")
 
     rows = FreightFetcher().fetch_route_rates()
+    supabase_latest = latest_route_row_from_supabase()
+    if supabase_latest:
+        rows = _merge_route_rows(rows, supabase_latest)
     latest = rows[-1] if rows else {}
     data = _empty_data(page_available)
     single_index = _fetch_sse_single_index(settings)
@@ -67,7 +73,12 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
     elif single_index.get("missing"):
         missing.extend(single_index["missing"])
     if latest:
-        sources.append(csv_source)
+        if latest.get("_storage_source") == "supabase_freight_routes":
+            sources.append(supabase_route_source)
+            data["supabase_route_used"] = True
+            data["supabase_route_date"] = latest.get("date")
+        else:
+            sources.append(csv_source)
         csv_data = _row_to_data(latest)
         csv_row_date = csv_data.get("latest_date")
         if data.get("latest_date") and csv_data.get("latest_date"):
@@ -84,8 +95,13 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
         for field in ("history", "note"):
             data[field] = data.get(field) or csv_data.get(field)
         data["history"] = rows[-26:]
-        data["note"] = (data.get("note", "") + " SCFI route data may be supplemented from local CSV when still fresh. Empty cells are not guessed.").strip()
+        if latest.get("_storage_source") == "supabase_freight_routes":
+            data["note"] = (data.get("note", "") + " SCFI route data was supplemented from Supabase freight_routes when fresher than local CSV. Empty cells are not guessed.").strip()
+        else:
+            data["note"] = (data.get("note", "") + " SCFI route data may be supplemented from local CSV when still fresh. Empty cells are not guessed.").strip()
         _apply_csv_freshness_guard(data, missing)
+        if latest.get("_storage_source") != "supabase_freight_routes":
+            _sync_route_row_to_supabase_if_current(latest, data)
     if data.get("scfi_latest") is None:
         official = _fetch_official_scfi_latest(settings)
         if official.get("scfi_latest") is not None:
@@ -108,27 +124,40 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
         data["search_screenshots"] = search.get("screenshots", [])
         extracted = _sanitize_search_intelligence(search.get("extracted") or {}, data)
         data["search_intelligence"] = extracted
+        csv_update = _maybe_update_scfi_csv_from_search(extracted, data, latest)
+        if csv_update.get("updated"):
+            data["csv_auto_updated"] = True
+            data["csv_update_note"] = csv_update.get("note")
+            data["csv_data_date"] = csv_update.get("date")
+            data["csv_row_date"] = csv_update.get("date")
+            data["verified_route_source"] = csv_update.get("source")
+            data["csv_exact_used"] = True
+            data["csv_stale"] = False
+            data["csv_filled_fields"] = [
+                "scfi_latest",
+                "weekly_change",
+                "scfi_streak_weeks",
+                "us_west",
+                "us_west_weekly_change",
+                "us_east",
+                "us_east_weekly_change",
+                "europe",
+                "europe_weekly_change",
+            ]
+        elif csv_update.get("note"):
+            data["csv_update_note"] = csv_update.get("note")
         route_rates = extracted.get("route_rates") or {}
-        if data.get("us_west") is None:
-            data["us_west"] = _safe_float(route_rates.get("us_west"))
-        if data.get("us_east") is None:
-            data["us_east"] = _safe_float(route_rates.get("us_east"))
-        if data.get("europe") is None:
-            data["europe"] = _safe_float(route_rates.get("europe"))
+        _assign_search_value(data, "us_west", route_rates.get("us_west"))
+        _assign_search_value(data, "us_east", route_rates.get("us_east"))
+        _assign_search_value(data, "europe", route_rates.get("europe"))
         scfi = extracted.get("scfi") or {}
-        if data.get("scfi_latest") is None:
-            data["scfi_latest"] = _safe_float(scfi.get("latest_value"))
-        if data.get("weekly_change") is None:
-            data["weekly_change"] = _safe_float(scfi.get("weekly_change"))
-        if data.get("scfi_streak_weeks") is None:
-            data["scfi_streak_weeks"] = _safe_float(scfi.get("weeks_up_or_down"))
+        _assign_search_value(data, "scfi_latest", scfi.get("latest_value"))
+        _assign_search_value(data, "weekly_change", scfi.get("weekly_change"))
+        _assign_search_value(data, "scfi_streak_weeks", scfi.get("weeks_up_or_down"))
         route_weekly_change = extracted.get("route_weekly_change") or {}
-        if data.get("us_west_weekly_change") is None:
-            data["us_west_weekly_change"] = _safe_float(route_weekly_change.get("us_west"))
-        if data.get("us_east_weekly_change") is None:
-            data["us_east_weekly_change"] = _safe_float(route_weekly_change.get("us_east"))
-        if data.get("europe_weekly_change") is None:
-            data["europe_weekly_change"] = _safe_float(route_weekly_change.get("europe"))
+        _assign_search_value(data, "us_west_weekly_change", route_weekly_change.get("us_west"))
+        _assign_search_value(data, "us_east_weekly_change", route_weekly_change.get("us_east"))
+        _assign_search_value(data, "europe_weekly_change", route_weekly_change.get("europe"))
         if data.get("red_sea_status") is None:
             red_sea = extracted.get("red_sea") or {}
             data["red_sea_status"] = red_sea.get("status") if red_sea.get("status") != "unknown" else None
@@ -167,6 +196,50 @@ def _route_value_count(data: dict[str, Any]) -> int:
     return sum(1 for route in ("us_west", "us_east", "europe") if data.get(route) is not None)
 
 
+def _row_route_value_count(row: dict[str, Any]) -> int:
+    return sum(1 for route in ("us_west", "us_east", "europe") if _safe_float(row.get(route)) is not None)
+
+
+def _merge_route_rows(local_rows: list[dict[str, Any]], cloud_row: dict[str, Any]) -> list[dict[str, Any]]:
+    if not cloud_row or not cloud_row.get("date"):
+        return local_rows
+    rows = [dict(row) for row in local_rows]
+    cloud_date = cloud_row.get("date")
+    same_day = [row for row in rows if row.get("date") == cloud_date]
+    rows = [row for row in rows if row.get("date") != cloud_date]
+    if same_day:
+        best_same_day = sorted(
+            same_day + [cloud_row],
+            key=lambda row: (_row_route_value_count(row), 1 if row.get("_storage_source") == "supabase_freight_routes" else 0),
+            reverse=True,
+        )[0]
+        rows.append(best_same_day)
+    else:
+        rows.append(cloud_row)
+    return sorted(rows, key=lambda item: item.get("date") or "")
+
+
+def _sync_route_row_to_supabase_if_current(row: dict[str, Any], data: dict[str, Any]) -> None:
+    row_date = row.get("date")
+    age = _age_days(row_date)
+    if age is None or age > _csv_max_age_days():
+        return
+    result = upsert_route_row_to_supabase(row)
+    if result.get("written"):
+        data["supabase_route_synced"] = True
+        data["supabase_route_date"] = row_date
+        sync_note = f"已將有效期限內的航線資料同步到 Supabase freight_routes，資料日期 {row_date}。"
+        data["csv_update_note"] = f"{data.get('csv_update_note')} {sync_note}".strip() if data.get("csv_update_note") else sync_note
+
+
+def _assign_search_value(data: dict[str, Any], key: str, raw_value: Any) -> None:
+    value = _safe_float(raw_value)
+    if value is None:
+        return
+    if data.get(key) is None or data.get("csv_auto_updated"):
+        data[key] = value
+
+
 def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
@@ -189,6 +262,10 @@ def _parse_date(value: Any) -> date | None:
     try:
         return date.fromisoformat(text[:10])
     except Exception:
+        pass
+    try:
+        return parsedate_to_datetime(text).date()
+    except Exception:
         return None
 
 
@@ -203,6 +280,12 @@ def _date_after(left: Any, right: Any) -> bool:
     left_date = _parse_date(left)
     right_date = _parse_date(right)
     return bool(left_date and right_date and left_date > right_date)
+
+
+def _same_date(left: Any, right: Any) -> bool:
+    left_date = _parse_date(left)
+    right_date = _parse_date(right)
+    return bool(left_date and right_date and left_date == right_date)
 
 
 def _clear_csv_exact_fields(data: dict[str, Any], fields: list[str] | None = None, keep_official_scfi: bool = False) -> None:
@@ -296,6 +379,189 @@ def _downgrade_weak_search_route_exactness(data: dict[str, Any], missing: list[s
     missing.append(
         "Data Limitation: 搜尋 fallback 只取得單一航線數字，已降級為趨勢推論；需三大航線交叉確認或快取補齊。"
     )
+
+
+def _maybe_update_scfi_csv_from_search(
+    extracted: dict[str, Any],
+    current_data: dict[str, Any],
+    latest_csv_row: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not extracted:
+        return {"updated": False, "note": ""}
+    if _env("SCFI_AUTO_UPDATE_CSV", "true").lower() not in {"1", "true", "yes", "on"}:
+        return {"updated": False, "note": "SCFI CSV auto-update disabled by SCFI_AUTO_UPDATE_CSV."}
+
+    row = _csv_row_from_search_extraction(extracted)
+    if not row:
+        return {"updated": False, "note": "搜尋資料未取得三條主要航線完整數字，不更新 CSV。"}
+
+    search_date = row.get("date")
+    csv_date = (latest_csv_row or {}).get("date") or current_data.get("csv_row_date")
+    if not search_date:
+        return {"updated": False, "note": "搜尋資料沒有可驗證資料日期，不更新 CSV。"}
+    if csv_date and not (_date_after(search_date, csv_date) or _same_date(search_date, csv_date)):
+        return {"updated": False, "note": f"搜尋資料日期 {search_date} 未比 CSV 日期 {csv_date} 新，不更新 CSV。"}
+    if _same_date(search_date, csv_date) and latest_csv_row and not _csv_row_materially_changed(row, latest_csv_row):
+        return {"updated": False, "note": f"搜尋資料日期 {search_date} 與 CSV 相同且數值一致，沿用 CSV。"}
+
+    if not _write_scfi_csv_row(row):
+        return {"updated": False, "note": "搜尋資料符合更新條件，但寫入 data/scfi_routes.csv 失敗。"}
+
+    source = row.get("source") or "auto_updated_from_public_news"
+    action = "覆寫" if _same_date(search_date, csv_date) else "新增"
+    return {
+        "updated": True,
+        "date": search_date,
+        "source": source,
+        "note": f"{action} data/scfi_routes.csv：使用公開新聞/搜尋抽取的較新航線資料，資料日 {search_date}。",
+    }
+
+
+def _csv_row_from_search_extraction(extracted: dict[str, Any]) -> dict[str, str] | None:
+    route_rates = extracted.get("route_rates") or {}
+    route_weekly = extracted.get("route_weekly_change") or {}
+    scfi = extracted.get("scfi") or {}
+    required = [
+        route_rates.get("us_west"),
+        route_rates.get("us_east"),
+        route_rates.get("europe"),
+        route_weekly.get("us_west"),
+        route_weekly.get("us_east"),
+        route_weekly.get("europe"),
+    ]
+    if any(_safe_float(value) is None for value in required):
+        return None
+    data_date = _extracted_data_date(extracted)
+    if not data_date:
+        return None
+    source = _extracted_source_label(extracted)
+    return {
+        "date": data_date,
+        "scfi": _csv_number(scfi.get("latest_value")),
+        "weekly_change": _csv_number(scfi.get("weekly_change")),
+        "scfi_streak_weeks": _csv_number(scfi.get("weeks_up_or_down"), decimals=0),
+        "us_west": _csv_number(route_rates.get("us_west")),
+        "us_west_weekly_change": _csv_number(route_weekly.get("us_west")),
+        "us_east": _csv_number(route_rates.get("us_east")),
+        "us_east_weekly_change": _csv_number(route_weekly.get("us_east")),
+        "europe": _csv_number(route_rates.get("europe")),
+        "europe_weekly_change": _csv_number(route_weekly.get("europe")),
+        "mediterranean": "",
+        "asia_regional": "",
+        "monthly_change": "",
+        "source": source,
+    }
+
+
+def _extracted_data_date(extracted: dict[str, Any]) -> str:
+    for key in ("data_date", "latest_date", "as_of"):
+        parsed = _parse_date(extracted.get(key))
+        if parsed:
+            return parsed.isoformat()
+    scfi = extracted.get("scfi") or {}
+    for key in ("data_date", "latest_date", "as_of"):
+        parsed = _parse_date(scfi.get(key))
+        if parsed:
+            return parsed.isoformat()
+    dates: list[date] = []
+    for section in ("evidence_type", "scfi"):
+        raw = extracted.get(section) or {}
+        candidates = json.dumps(raw, ensure_ascii=False)
+        dates.extend(_dates_from_text(candidates))
+    for url in (scfi.get("sources") or [])[:5]:
+        dates.extend(_dates_from_text(str(url)))
+    return max(dates).isoformat() if dates else ""
+
+
+def _dates_from_text(text: str) -> list[date]:
+    out: list[date] = []
+    for match in re.findall(r"20\d{2}[-/年.]\d{1,2}[-/月.]\d{1,2}", text or ""):
+        normalized = re.sub(r"[年月/.]", "-", match).rstrip("-")
+        parsed = _parse_date(normalized)
+        if parsed:
+            out.append(parsed)
+    current_year = datetime.now(timezone.utc).year
+    for month, day in re.findall(r"(?<!\d)(\d{1,2})[/-](\d{1,2})(?!\d)", text or ""):
+        try:
+            parsed = date(current_year, int(month), int(day))
+        except ValueError:
+            continue
+        out.append(parsed)
+    return out
+
+
+def _extracted_source_label(extracted: dict[str, Any]) -> str:
+    scfi = extracted.get("scfi") or {}
+    sources = [str(item) for item in scfi.get("sources") or [] if item]
+    if sources:
+        return "auto_updated_from_public_news:" + sources[0]
+    return "auto_updated_from_public_news"
+
+
+def _csv_row_materially_changed(new_row: dict[str, str], old_row: dict[str, Any]) -> bool:
+    fields = (
+        "scfi",
+        "weekly_change",
+        "scfi_streak_weeks",
+        "us_west",
+        "us_west_weekly_change",
+        "us_east",
+        "us_east_weekly_change",
+        "europe",
+        "europe_weekly_change",
+    )
+    for field in fields:
+        left = _safe_float(new_row.get(field))
+        right = _safe_float(old_row.get(field))
+        if left is None and right is None:
+            continue
+        if left is None or right is None:
+            return True
+        tolerance = 0.01 if "weekly_change" in field else 1.0
+        if abs(left - right) > tolerance:
+            return True
+    return False
+
+
+def _write_scfi_csv_row(row: dict[str, str]) -> bool:
+    fieldnames = [
+        "date",
+        "scfi",
+        "weekly_change",
+        "scfi_streak_weeks",
+        "us_west",
+        "us_west_weekly_change",
+        "us_east",
+        "us_east_weekly_change",
+        "europe",
+        "europe_weekly_change",
+        "mediterranean",
+        "asia_regional",
+        "monthly_change",
+        "source",
+    ]
+    try:
+        SCFI_CSV.parent.mkdir(parents=True, exist_ok=True)
+        rows = _load_scfi_csv()
+        rows = [existing for existing in rows if existing.get("date") != row.get("date")]
+        rows.append({key: row.get(key, "") for key in fieldnames})
+        rows = sorted(rows, key=lambda item: item.get("date") or "")
+        with SCFI_CSV.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        return True
+    except Exception:
+        return False
+
+
+def _csv_number(value: Any, decimals: int = 2) -> str:
+    number = _safe_float(value)
+    if number is None:
+        return ""
+    if decimals == 0 or abs(number - round(number)) < 0.000001:
+        return str(int(round(number)))
+    return f"{number:.{decimals}f}".rstrip("0").rstrip(".")
 
 
 def _fetch_sse_single_index(settings: Any) -> dict[str, Any]:
@@ -424,10 +690,18 @@ def _sanitize_search_intelligence(extracted: dict[str, Any], accepted: dict[str,
     if not extracted:
         return extracted
     cleaned = json.loads(json.dumps(extracted))
+    search_date = _extracted_data_date(cleaned)
+    accepted_date = accepted.get("csv_data_date") or accepted.get("csv_row_date") or accepted.get("latest_date")
+    search_is_newer = _date_after(search_date, accepted_date)
     scfi = cleaned.get("scfi") or {}
     search_scfi = _safe_float(scfi.get("latest_value"))
     accepted_scfi = _safe_float(accepted.get("scfi_latest"))
-    if search_scfi is not None and accepted_scfi is not None and _materially_different(search_scfi, accepted_scfi, tolerance_pct=3.0):
+    if (
+        not search_is_newer
+        and search_scfi is not None
+        and accepted_scfi is not None
+        and _materially_different(search_scfi, accepted_scfi, tolerance_pct=3.0)
+    ):
         scfi["latest_value"] = None
         evidence = cleaned.setdefault("evidence_type", {})
         evidence["exact_data"] = [
@@ -444,7 +718,12 @@ def _sanitize_search_intelligence(extracted: dict[str, Any], accepted: dict[str,
     for route in ("us_west", "us_east", "europe"):
         accepted_rate = _safe_float(accepted.get(route))
         search_rate = _safe_float(route_rates.get(route))
-        if accepted_rate is not None and search_rate is not None and _materially_different(search_rate, accepted_rate, tolerance_pct=5.0):
+        if (
+            not search_is_newer
+            and accepted_rate is not None
+            and search_rate is not None
+            and _materially_different(search_rate, accepted_rate, tolerance_pct=5.0)
+        ):
             route_rates[route] = None
             _remove_route_evidence(cleaned, route)
             cleaned.setdefault("evidence_type", {}).setdefault("missing_data", []).append(
@@ -453,7 +732,12 @@ def _sanitize_search_intelligence(extracted: dict[str, Any], accepted: dict[str,
 
         accepted_change = _safe_float(accepted.get(f"{route}_weekly_change"))
         search_change = _safe_float(route_weekly.get(route))
-        if accepted_change is not None and search_change is not None and abs(search_change - accepted_change) > 3.0:
+        if (
+            not search_is_newer
+            and accepted_change is not None
+            and search_change is not None
+            and abs(search_change - accepted_change) > 3.0
+        ):
             route_weekly[route] = None
             _remove_route_evidence(cleaned, route)
             cleaned.setdefault("evidence_type", {}).setdefault("missing_data", []).append(
@@ -565,7 +849,9 @@ def _extract_scfi_numbers_from_text(text: str, rows: list[dict[str, Any]]) -> di
         return {}
 
     sources = [row.get("url") for row in rows if isinstance(row, dict) and row.get("url")]
+    data_date = _infer_freight_data_date(normalized, rows)
     return {
+        "data_date": data_date,
         "scfi": {
             "latest_value": scfi_latest,
             "weekly_change": weekly_change,
@@ -573,11 +859,26 @@ def _extract_scfi_numbers_from_text(text: str, rows: list[dict[str, Any]]) -> di
             "weeks_up_or_down": weeks,
             "confidence": 0.82,
             "sources": sources[:5],
+            "data_date": data_date,
         },
         "route_rates": {"us_west": us_west, "us_east": us_east, "europe": europe, "asia": None},
         "route_weekly_change": {"us_west": us_west_change, "us_east": us_east_change, "europe": europe_change},
         "evidence_type": {"exact_data": exact_notes, "inferred_trend": [], "missing_data": []},
     }
+
+
+def _infer_freight_data_date(text: str, rows: list[dict[str, Any]]) -> str:
+    explicit_dates = _dates_from_text(text)
+    if explicit_dates:
+        return max(explicit_dates).isoformat()
+    published_dates: list[date] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        parsed = _parse_date(row.get("published_at"))
+        if parsed:
+            published_dates.append(parsed)
+    return max(published_dates).isoformat() if published_dates else ""
 
 
 def _normalize_number_text(text: str) -> str:
@@ -881,3 +1182,52 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _maybe_update_scfi_csv_from_search(
+    extracted: dict[str, Any],
+    current_data: dict[str, Any],
+    latest_csv_row: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not extracted:
+        return {"updated": False, "note": ""}
+    if _env("SCFI_AUTO_UPDATE_CSV", "true").lower() not in {"1", "true", "yes", "on"}:
+        return {"updated": False, "note": "航線資料自動更新已關閉。"}
+
+    row = _csv_row_from_search_extraction(extracted)
+    if not row:
+        return {"updated": False, "note": "公開搜尋未取得完整美西、美東、歐洲線數字，未更新航線資料庫。"}
+
+    search_date = row.get("date")
+    csv_date = (latest_csv_row or {}).get("date") or current_data.get("csv_row_date")
+    if not search_date:
+        return {"updated": False, "note": "公開搜尋資料缺少資料日期，未更新航線資料庫。"}
+    if csv_date and not (_date_after(search_date, csv_date) or _same_date(search_date, csv_date)):
+        return {"updated": False, "note": f"公開搜尋資料日期 {search_date} 早於既有資料 {csv_date}，未更新航線資料庫。"}
+    if _same_date(search_date, csv_date) and latest_csv_row and not _csv_row_materially_changed(row, latest_csv_row):
+        return {"updated": False, "note": f"公開搜尋資料日期 {search_date} 與既有資料相同且數值未變，未更新航線資料庫。"}
+
+    csv_written = _write_scfi_csv_row(row)
+    supabase_result = upsert_route_row_to_supabase(row)
+    supabase_written = bool(supabase_result.get("written"))
+    if not csv_written and not supabase_written:
+        return {
+            "updated": False,
+            "note": f"航線資料更新失敗：CSV 未寫入；Supabase 未寫入：{supabase_result.get('note')}",
+        }
+
+    source = row.get("source") or "auto_updated_from_public_news"
+    targets = []
+    if csv_written:
+        targets.append("本機 CSV")
+    if supabase_written:
+        targets.append("Supabase freight_routes")
+    action = "更新" if _date_after(search_date, csv_date) else "覆寫同日"
+    return {
+        "updated": True,
+        "date": search_date,
+        "source": source,
+        "note": f"{action}航線資料至 {'、'.join(targets)}，資料日期 {search_date}。",
+        "csv_written": csv_written,
+        "supabase_written": supabase_written,
+    }

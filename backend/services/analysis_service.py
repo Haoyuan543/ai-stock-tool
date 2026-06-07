@@ -3915,8 +3915,9 @@ def _e_data_quality_table(scores: dict[str, Any], truth: dict[str, Any], data_qu
 
 
 def _e_freight_cache_lines(freight: dict[str, Any]) -> str:
+    csv_note = f"\n- CSV 自動更新：{freight.get('csv_update_note')}" if freight.get("csv_update_note") else ""
     if not freight.get("cache_used"):
-        return "- 快取補齊：否，本次報告以本次抓取與推論資料為主。"
+        return "- 快取補齊：否，本次報告以本次抓取與推論資料為主。" + csv_note
     fields = freight.get("cache_filled_fields") or []
     field_names = {
         "scfi_latest": "SCFI 最新值",
@@ -3939,6 +3940,7 @@ def _e_freight_cache_lines(freight: dict[str, Any]) -> str:
         f"- 快取建立時間：{freight.get('cache_fetched_at') or '資料不明'}\n"
         f"- 快取來源：{freight.get('cache_source') or 'last_successful_freight_cache'}\n"
         f"- 快取提醒：{freight.get('cache_note') or '快取只能降低資料缺口，不能取代本次實際抓取。'}"
+        + csv_note
     )
 
 
@@ -4327,6 +4329,8 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
         if freight.get("csv_exact_used")
         else "未使用或已過期"
     )
+    if freight.get("csv_update_note"):
+        csv_status = f"{csv_status}；{freight.get('csv_update_note')}"
     search_status = "已執行，作為趨勢與交叉確認" if freight.get("search_intelligence") else "未使用或沒有可用結果"
     screenshot_status = (
         f"已擷取 {len(freight.get('search_screenshots') or [])} 張，僅作備援"

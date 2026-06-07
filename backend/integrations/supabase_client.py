@@ -76,6 +76,28 @@ def insert_rows(table: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return response.json()
 
 
+def upsert_rows(table: str, rows: list[dict[str, Any]], on_conflict: str | None = None) -> list[dict[str, Any]]:
+    if not is_supabase_configured():
+        print("Supabase skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured.")
+        print_diagnostic()
+        return []
+    if not rows:
+        return []
+
+    headers = _headers()
+    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+    params = {"on_conflict": on_conflict} if on_conflict else None
+    url = f"{_base_url()}/rest/v1/{table}"
+    with httpx.Client(timeout=30) as client:
+        try:
+            response = client.post(url, headers=headers, params=params, content=json.dumps(rows, ensure_ascii=False))
+        except httpx.RequestError:
+            print_diagnostic("Supabase request failed")
+            raise
+        response.raise_for_status()
+        return response.json()
+
+
 def select_rows(table: str, params: dict[str, str] | None = None) -> list[dict[str, Any]]:
     if not is_supabase_configured():
         print("Supabase skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured.")

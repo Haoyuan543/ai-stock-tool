@@ -172,6 +172,16 @@ The system still tries real sources first: official page/OCR, CSV import, public
 
 For Supabase history, rerun `database/schema.sql` after pulling this version. It adds a `freight_cache` table so GitHub Actions can reuse the latest successful route data when a public source is temporarily unavailable.
 
+## Supabase Freight Routes
+
+GitHub Actions can also read the latest SCFI route data from Supabase, so cloud runs do not depend only on the CSV committed in the repository.
+
+- Run `database/schema.sql` in Supabase SQL Editor after pulling this version. It adds the `freight_routes` table.
+- Keep `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `UPDATE_SUPABASE=true` in GitHub Actions secrets.
+- `READ_SUPABASE_FREIGHT=true` is enabled by default. When set, the freight fetcher reads the newest row from `freight_routes` before falling back to `data/scfi_routes.csv`.
+- When public search extraction finds a newer complete set of SCFI, US West, US East, and Europe route numbers, the tool writes that row to both local CSV and Supabase.
+- The report labels whether route values came from official pages, Supabase, CSV, or search-inferred context.
+
 ## Data Quality Classification
 
 Every `/analyze` response includes `data_quality`:

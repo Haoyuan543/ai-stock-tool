@@ -70,6 +70,27 @@ create table if not exists freight_cache (
   created_at timestamptz default now()
 );
 
+create table if not exists freight_routes (
+  date date primary key,
+  scfi numeric,
+  weekly_change numeric,
+  scfi_streak_weeks numeric,
+  us_west numeric,
+  us_west_weekly_change numeric,
+  us_east numeric,
+  us_east_weekly_change numeric,
+  europe numeric,
+  europe_weekly_change numeric,
+  mediterranean numeric,
+  asia_regional numeric,
+  monthly_change numeric,
+  source text,
+  source_url text,
+  quality text default 'verified_public_route_data',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
 create table if not exists prediction_validations (
   validation_id text primary key,
   prediction_id text,
@@ -88,4 +109,5 @@ create table if not exists prediction_validations (
 create index if not exists idx_analysis_runs_symbol_time on analysis_runs(symbol, analysis_time desc);
 create index if not exists idx_market_snapshots_symbol_date on market_snapshots(symbol, price_date desc);
 create index if not exists idx_freight_cache_symbol_date on freight_cache(symbol, data_date desc, fetched_at desc);
+create index if not exists idx_freight_routes_date_desc on freight_routes(date desc);
 create index if not exists idx_prediction_validations_symbol on prediction_validations(symbol, horizon);

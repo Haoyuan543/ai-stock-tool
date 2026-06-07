@@ -106,6 +106,7 @@ SUPABASE_URL
 SUPABASE_SERVICE_ROLE_KEY
 UPDATE_SUPABASE
 SUPABASE_REQUIRED
+READ_SUPABASE_FREIGHT
 VALIDATE_PREDICTIONS
 ```
 
@@ -192,6 +193,7 @@ Supabase：
 
 - `analysis_runs` 應新增一筆
 - `market_snapshots` 應新增股價快照
+- `freight_routes` 應在航線資料有效時新增或更新最新一筆 SCFI / 美西 / 美東 / 歐洲線資料
 - `prediction_validations` 會在到期時新增驗證資料
 
 Email：
@@ -233,6 +235,7 @@ GitHub Token 權限不足。請確認 Actions 是 Read and write。
 檢查：
 
 - `UPDATE_SUPABASE=true`
+- `READ_SUPABASE_FREIGHT=true`
 - `SUPABASE_URL` 是否為 `https://...supabase.co`
 - `SUPABASE_SERVICE_ROLE_KEY` 是否填 Secret key，不是 Publishable key
 - `database/schema.sql` 是否已在 Supabase SQL Editor 執行成功
