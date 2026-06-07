@@ -2673,13 +2673,7 @@ def _final_compose_report(
 
 ## B. Detailed Report
 
-## 今日操作建議
-- 建議：{action_plan["recommendation"]}
-- 建議張數：{action_plan["suggested_lots"]} 張
-- 理由：{action_plan["reason"]}
-- 觸發條件：{action_plan["trigger"]}
-- 失效條件：{action_plan["invalidated_by"]}
-- 短線提醒：{timing_note}
+{_e_action_table(action_plan, timing_note)}
 
 {position_section}
 
@@ -3080,13 +3074,7 @@ def _tw_compose_report(
 
 ## 詳細報告
 
-## 今日操作建議
-- 建議：{action_plan["recommendation"]}
-- 建議張數：{action_plan["suggested_lots"]} 張
-- 理由：{action_plan["reason"]}
-- 觸發條件：{action_plan["trigger"]}
-- 失效條件：{action_plan["invalidated_by"]}
-- 短線提醒：{timing_note}
+{_e_action_table(action_plan, timing_note)}
 
 {_tw_position_section(self, mode, position, action_plan)}
 
@@ -3585,6 +3573,347 @@ def _e_position_section(self: AnalysisService, mode: str, position: dict[str, An
 - 跌破 20 日均線：若同時 SCFI 轉弱與法人轉賣，風險升高"""
 
 
+def _e_route_source_short(freight: dict[str, Any], route: str) -> str:
+    if freight.get("official_route_exact_used"):
+        return f"SSE 官方單期頁，資料日 {freight.get('latest_date') or '未知'}"
+    if freight.get("csv_exact_used") and route in {"us_west", "us_east", "europe"}:
+        return f"CSV 備援，資料日 {freight.get('csv_data_date') or '未知'}"
+    if freight.get("search_intelligence") and freight.get(route) is not None:
+        return "公開新聞 / 搜尋交叉確認"
+    return "資料不足"
+
+
+def _e_scfi_source_short(freight: dict[str, Any]) -> str:
+    if freight.get("official_single_index_used"):
+        return f"SSE 官方單期頁，資料日 {freight.get('latest_date') or '未知'}"
+    if freight.get("official_chart_parsed"):
+        return "SSE 官方圖表 OCR"
+    if freight.get("csv_exact_used"):
+        return f"CSV 備援，資料日 {freight.get('csv_data_date') or '未知'}"
+    if freight.get("search_intelligence"):
+        return "公開新聞 / 搜尋交叉確認"
+    return "資料不足"
+
+
+def _e_freight_source_stamp(freight: dict[str, Any], key: str, analysis_time: str = "") -> str:
+    if key == "scfi":
+        source = _e_scfi_source_short(freight)
+        data_date = freight.get("latest_date") or freight.get("csv_data_date") or "資料不足"
+    else:
+        source = _e_route_source_short(freight, key)
+        data_date = freight.get("csv_data_date") or freight.get("latest_date") or "資料不足"
+    source = source.split("，資料日", 1)[0]
+    fetched_at = analysis_time or freight.get("fetched_at") or "資料不足"
+    return f"來源：{source}；資料時間：{data_date}；抓取時間：{fetched_at}"
+
+
+def _e_scenario_table(stock: dict[str, Any], freight: dict[str, Any], inst: dict[str, Any], action_plan: dict[str, Any]) -> str:
+    freight_up = (freight.get("intelligence") or {}).get("overall_trend") == "up"
+    inst_total_5d = ((inst.get("flow_sums") or {}).get("total") or {}).get("5d")
+    base_prob = 50
+    bull_prob = 30 if freight_up else 20
+    bear_prob = max(20, 100 - base_prob - bull_prob)
+    inst_text = "法人買超未完全同步" if inst_total_5d and inst_total_5d > 0 else "法人籌碼仍需觀察"
+    return f"""## 後續走勢情境（Scenario Cases）
+
+| 情境 | 機率 | 走勢判斷 | 操作 |
+|---|---:|---|---|
+| 基準情境（Base Case） | {base_prob}% | 220～250 區間偏強震盪，等待 SCFI / Drewry / Freightos 續強確認。 | 拉回不破 220～230 可偏多觀察；接近 245～250 不追價。 |
+| 多方情境（Bull Case） | {bull_prob}% | 運價續強、{inst_text}，股價挑戰 250 以上。 | 站穩 250 且量價健康，才看 255～260；否則分批減碼降低風險。 |
+| 空方情境（Bear Case） | {bear_prob}% | 運價漲勢失守或法人買盤退潮，回測 220 甚至 210～215。 | 跌破 220 且法人轉賣，先觀望；不急著攤平。 |
+"""
+
+
+def self_fmt(value: Any) -> str:
+    return "資料不足" if value is None else f"{float(value):.0f}" if isinstance(value, (int, float)) else str(value)
+
+
+def _e_price_zone_table(stock: dict[str, Any], action_plan: dict[str, Any]) -> str:
+    return f"""## 價位區間（Price Zones）
+
+| 區域 | 價位 | 意義 | 動作 |
+|---|---:|---|---|
+| 支撐區 | 220～230 | 若運價與投信未反轉，屬偏多回測區。 | 觀察買回，不追高。 |
+| 壓力區 | 245～250 | 短線籌碼與運價預期的第一道檢驗。 | 若接近此區，先看量價與法人是否同步。 |
+| 過熱區 | 255～260 | 需要新運價利多支撐，否則容易震盪。 | 可評估分批降風險。 |
+| 轉弱區 | 跌破 220 或 20 日均線 | 技術面轉弱訊號。 | 若同時 SCFI / 法人轉弱，降低部位。 |
+"""
+
+
+def _e_fact_inference_sections(market: dict[str, Any], action_plan: dict[str, Any]) -> str:
+    stock = market.get("stock") or {}
+    freight = market.get("freight") or {}
+    freight_intel = freight.get("intelligence") or {}
+    inst = market.get("institutional") or {}
+    fundamentals = market.get("fundamentals") or {}
+    etf = market.get("etf_flow") or {}
+    red = market.get("red_sea") or {}
+    flow = inst.get("flow_sums") or {}
+    total_5d = ((flow.get("total") or {}).get("5d"))
+    trust_5d = ((flow.get("trust") or {}).get("5d"))
+    foreign_5d = ((flow.get("foreign") or {}).get("5d"))
+    return f"""## 事實（Facts）
+
+- 股價資料顯示，最新收盤價 {self_fmt(stock.get("close"))}，資料日 {stock.get("latest_date") or "未知"}；20 日均線 {self_fmt(stock.get("ma20"))}，60 日均線 {self_fmt(stock.get("ma60"))}。
+- SCFI 綜合指數 {_e_num(freight.get("scfi_latest"))}，週變化 {_e_pct(freight.get("weekly_change"))}，來源：{_e_scfi_source_short(freight)}。
+- 美西線 {_e_num(freight.get("us_west"))}、美東線 {_e_num(freight.get("us_east"))}、歐洲線 {_e_num(freight.get("europe"))}；來源已列於下方航線表，不視為 SSE 官方直接航線數字。
+- 近 5 日三大法人合計 {_e_lots(total_5d)}；其中投信 {_e_lots(trust_5d)}、外資 {_e_lots(foreign_5d)}。
+- 每股盈餘（EPS）{_e_num(fundamentals.get("eps"))}，月營收年增率 {_e_pct(fundamentals.get("monthly_revenue_yoy"))}，股利殖利率 {_e_pct(fundamentals.get("dividend_yield"))}。
+
+## 推論（Inference）
+
+- 運價方向：{_e_label(freight_intel.get("overall_trend"))}，強度 {_e_label(freight_intel.get("strength"))}，信心 {freight_intel.get("confidence", 0)}。
+- 法人方向：投信若持續買超可支撐短線，但外資若持續賣超，代表國際資金尚未完全認同。
+- ETF 被動買盤：{_e_label(etf.get("etf_flow"))}，但持股與基金規模變化仍需交叉確認，不能大幅加分。
+- 紅海 / 繞航：{_e_label(red.get("status"))}，若繞航支撐降溫，運價可能回落。
+- 短線最重要的不是新聞標題，而是下一次 SCFI / Drewry / Freightos 是否連續確認。
+"""
+
+
+def _e_inline_text(value: Any) -> str:
+    text = str(value or "資料不足").strip()
+    return text.rstrip("。；; ")
+
+
+def _e_probability(value: Any) -> str:
+    if value is None:
+        return "資料不足"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 <= number <= 1:
+        return f"{number * 100:.0f}%"
+    return f"{number:.0f}%"
+
+
+def _e_strategy_discipline_table(market: dict[str, Any], action_plan: dict[str, Any], summary: dict[str, Any]) -> str:
+    freight = market.get("freight") or {}
+    freight_intel = freight.get("intelligence") or {}
+    inst = market.get("institutional") or {}
+    fundamentals = market.get("fundamentals") or {}
+    etf = market.get("etf_flow") or {}
+    fill = market.get("fill_dividend_probability") or {}
+    stock = market.get("stock") or {}
+    close = stock.get("close")
+    pressure_note = "接近第一壓力區，需看量價與法人是否同步。" if close and close >= 240 else "尚未進入主要壓力區，但不代表可無條件追價。"
+    next_sell = _e_inline_text(action_plan.get("next_sell_point"))
+    next_buyback = _e_inline_text(action_plan.get("next_buyback_point"))
+    return f"""## 策略檢查表（Strategy Checklist）
+
+| 檢查項目 | 目前證據 | 操作含義 |
+|---|---|---|
+| 籌碼是腳印 | 法人趨勢：{_e_label((inst.get("consecutive_trend") or {}).get("direction"))}；最新合計：{_e_inst_line(inst)} | 法人買賣只能當線索，不能單獨作為買賣理由。 |
+| 基本面是原因 | 運價方向：{_e_label(freight_intel.get("overall_trend"))}；EPS：{_e_num(fundamentals.get("eps"))}；月營收年增率：{_e_pct(fundamentals.get("monthly_revenue_yoy"))} | 若運價、月營收、EPS 無法支持籌碼，法人買盤權重需下降。 |
+| 價格位置決定風險報酬 | 最新價：{_e_num(close)}；賣出觀察：{next_sell}；買回觀察：{next_buyback} | {pressure_note} |
+| ETF 買盤不可超譯 | ETF 訊號：{_e_label(etf.get("etf_flow"))}；信心：{etf.get("confidence", 0)} | 沒有實際持股與基金規模變化時，只能低權重參考。 |
+| 外資訊號不是長線答案 | 外資近 5 日：{_e_lots(((inst.get("flow_sums") or {}).get("foreign") or {}).get("5d"))} | 外資買賣需與運價、基本面、價格位置交叉驗證。 |
+| 除息填息需同向 | 30 日填息機率：{_e_probability(fill.get("fill_probability_30d"))}；90 日填息機率：{_e_probability(fill.get("fill_probability_90d"))} | 填息敘事需同時看到運價、法人與技術面配合。 |
+| 資金效率 | 今日結論：{summary.get("market_state")}；今日動作：{summary.get("action")} | 若短線過熱，續抱也要檢查回撤風險與機會成本。 |
+
+核心原則：籌碼是腳印，基本面是原因，價格位置決定風險報酬。
+"""
+
+
+def _e_institutional_table(inst: dict[str, Any]) -> str:
+    flow = inst.get("flow_sums") or {}
+    def row(key: str, label: str) -> str:
+        values = flow.get(key) or {}
+        return f"| {label} | {_e_lots(values.get('1d'))} | {_e_lots(values.get('3d'))} | {_e_lots(values.get('5d'))} | {_e_lots(values.get('10d'))} |"
+    return f"""## 法人籌碼（Institutional Flow）
+
+| 類別 | 近 1 日 | 近 3 日 | 近 5 日 | 近 10 日 |
+|---|---:|---:|---:|---:|
+{row("trust", "投信")}
+{row("dealer", "自營商")}
+{row("foreign", "外資")}
+{row("total", "三大法人合計")}
+
+- 判讀：投信與外資若方向不同，代表籌碼可能是換手，不宜只用單一法人下結論。
+"""
+
+
+def _e_score_breakdown_table(scores: dict[str, Any], freight: dict[str, Any], inst: dict[str, Any], market: dict[str, Any]) -> str:
+    revised = scores.get("revised_score", {})
+    freight_reason = "運價趨勢與主要航線資料支撐方向。" if (freight.get("intelligence") or {}).get("overall_trend") == "up" else "運價方向仍需確認。"
+    etf = market.get("etf_flow") or {}
+    regime = market.get("market_regime") or {}
+    return f"""## 分數拆解（Score Breakdown）
+
+| 項目 | 分數 | 理由 |
+|---|---:|---|
+| 方向分數（Direction Score） | {revised.get("direction_score", "資料不足")} | {freight_reason} |
+| 時機分數（Timing Score） | {revised.get("timing_score", "資料不足")} | 若股價接近壓力區或 RSI 偏高，不適合追價。 |
+| 估值分數（Valuation Score） | {revised.get("valuation_score", "資料不足")} | EPS、股利與月營收提供估值基礎，但航運仍受運價循環影響。 |
+| 風險分數（Risk Score） | {revised.get("risk_score", "資料不足")} | 外資、紅海、油價與市場風險會影響部位大小。 |
+| ETF 分數（ETF Score） | {int((etf.get("confidence") or 0) * 100)} | ETF 訊號目前信心上限較低，需確認持股與基金規模變化。 |
+| 市場環境分數（Market Regime Score） | {int((regime.get("confidence") or 0) * 100)} | 市場環境信心不足時，多方結論需降級。 |
+| 資料可信度（Truthfulness Score） | {revised.get("truthfulness_score", "資料不足")} | 搜尋推論與缺漏越多，可信度越低。 |
+| 綜合分數（Overall Score） | {revised.get("overall_score", "資料不足")} | 綜合方向、時機、估值、風險與資料品質。 |
+"""
+
+
+def _e_action_table(action_plan: dict[str, Any], timing_note: str) -> str:
+    return f"""## 今日操作建議
+
+| 項目 | 內容 |
+|---|---|
+| 建議動作 | {action_plan["recommendation"]} |
+| 建議張數 | {action_plan["suggested_lots"]} 張 |
+| 理由 | {action_plan["reason"]} |
+| 觸發條件 | {action_plan["trigger"]} |
+| 失效條件 | {action_plan["invalidated_by"]} |
+| 短線提醒 | {timing_note} |
+"""
+
+
+def _e_core_evidence_table(
+    self: AnalysisService,
+    stock: dict[str, Any],
+    freight: dict[str, Any],
+    freight_intel: dict[str, Any],
+    inst: dict[str, Any],
+    fundamentals: dict[str, Any],
+    market: dict[str, Any],
+) -> str:
+    return f"""## 核心證據總表
+
+| 面向 | 關鍵資料 | 判讀 |
+|---|---|---|
+| 股價與技術 | 收盤價 {self._fmt(stock.get("close"))}；20 日均線 {self._fmt(stock.get("ma20"))}；60 日均線 {self._fmt(stock.get("ma60"))}；相對強弱指標（RSI）{self._fmt((stock.get("technical") or {}).get("rsi14"))} | 股價相對均線決定方向，RSI 偏高會降低短線追價分數。 |
+| 運價 | SCFI {self._fmt(freight.get("scfi_latest"))}；週變化 {self._fmt(freight.get("weekly_change"))}%；連續週數 {self._fmt(freight.get("scfi_streak_weeks"))}；方向 {_e_label(freight_intel.get("overall_trend"))} | 運價若續強，支撐長榮獲利與填息敘事；若轉弱需下修方向分數。 |
+| 法人 | {_e_inst_line(inst)} | 投信與外資若不同向，較像籌碼換手，不宜單看外資下結論。 |
+| 基本面 | 每股盈餘（EPS）{self._fmt(fundamentals.get("eps"))}；股利殖利率 {self._fmt(fundamentals.get("dividend_yield"))}；月營收年增率 {self._fmt(fundamentals.get("monthly_revenue_yoy"))}% | 基本面提供估值底氣，但航運股仍要跟運價循環一起判讀。 |
+| ETF 被動買盤 | {_e_label((market.get("etf_flow") or {}).get("etf_flow"))}；信心 {(market.get("etf_flow") or {}).get("confidence", 0)} | 若只有搜尋推論，不能大幅加分，需確認持股與基金規模變化。 |
+| 市場環境 | {_e_label((market.get("market_regime") or {}).get("market_regime"))}；信心 {(market.get("market_regime") or {}).get("confidence", 0)} | 市場風險偏高時，即使個股偏多也要降低操作強度。 |
+"""
+
+
+def _e_technical_table(self: AnalysisService, stock: dict[str, Any], freshness: dict[str, Any]) -> str:
+    return f"""## 股價與技術面證據
+
+| 項目 | 數值 | 說明 |
+|---|---:|---|
+| 股價資料日期 | {freshness.get("price_data_date") or "資料不足"} | 判斷資料是否足夠新鮮。 |
+| 分析時間 | {freshness.get("analysis_time") or "資料不足"} | 系統產生本次報告的時間。 |
+| 即時資料 | {"是" if freshness.get("is_realtime_price") else "否"} | 若不是即時資料，不適合盤中追價決策。 |
+| 收盤資料 | {"是" if freshness.get("is_closing_price") else "否"} | 收盤資料適合做日線與隔日策略。 |
+| 收盤價 | {self._fmt(stock.get("close"))} | 當前分析基準價。 |
+| 成交量 | {self._fmt(stock.get("volume"))} | 檢查價量是否同步。 |
+| 20 日均線 | {self._fmt(stock.get("ma20"))} | 短中線趨勢分界。 |
+| 60 日均線 | {self._fmt(stock.get("ma60"))} | 中期趨勢分界。 |
+| 支撐區 | {self._fmt(stock.get("support_20d"))} | 近期回測觀察區。 |
+| 壓力區 | {self._fmt(stock.get("resistance_20d"))} | 近期賣壓或停利觀察區。 |
+| 相對強弱指標（RSI） | {self._fmt((stock.get("technical") or {}).get("rsi14"))} | 過高代表追價風險升高。 |
+| 指數平滑異同移動平均線（MACD） | {self._fmt((stock.get("technical") or {}).get("macd"))} | 觀察動能是否延續。 |
+
+判讀：股價相對均線決定方向分數；RSI 過高會降低時機分數，避免追高。
+"""
+
+
+def _e_freight_evidence_table(
+    self: AnalysisService,
+    freight: dict[str, Any],
+    freight_intel: dict[str, Any],
+    analysis_time: str,
+) -> str:
+    return f"""## 運價與航運景氣證據
+
+| 指標 | 最新數值 | 週變化 | 連續週數 | 來源與時間 |
+|---|---:|---:|---:|---|
+| SCFI 綜合指數 | {self._fmt(freight.get("scfi_latest"))} | {self._fmt(freight.get("weekly_change"))}% | {self._fmt(freight.get("scfi_streak_weeks"))} | {_e_freight_source_stamp(freight, "scfi", analysis_time)} |
+| 美西線 | {self._fmt(freight.get("us_west"))} | {self._fmt(freight.get("us_west_weekly_change"))}% | - | {_e_freight_source_stamp(freight, "us_west", analysis_time)} |
+| 美東線 | {self._fmt(freight.get("us_east"))} | {self._fmt(freight.get("us_east_weekly_change"))}% | - | {_e_freight_source_stamp(freight, "us_east", analysis_time)} |
+| 歐洲線 | {self._fmt(freight.get("europe"))} | {self._fmt(freight.get("europe_weekly_change"))}% | - | {_e_freight_source_stamp(freight, "europe", analysis_time)} |
+
+| 運價智慧判讀 | 結果 |
+|---|---|
+| 方向 | {_e_label(freight_intel.get("overall_trend"))} |
+| 強度 | {_e_label(freight_intel.get("strength"))} |
+| 信心 | {freight_intel.get("confidence", 0)} |
+| 來源數 | {freight_intel.get("source_count", 0)} |
+
+{_e_freight_cache_lines(freight)}
+
+對長榮的意義：{_e_freight_meaning(freight, freight_intel)}
+"""
+
+
+def _e_fundamental_table(self: AnalysisService, fundamentals: dict[str, Any]) -> str:
+    return f"""## 基本面與股利證據
+
+| 項目 | 數值 | 判讀 |
+|---|---:|---|
+| 每股盈餘（EPS） | {self._fmt(fundamentals.get("eps"))} | 估值與獲利能力基準。 |
+| 本益比（PER） | {self._fmt(fundamentals.get("per"))} | 觀察市場願意給的獲利倍數。 |
+| 股價淨值比（PBR） | {self._fmt(fundamentals.get("pbr"))} | 觀察股價相對淨值位置。 |
+| 股利殖利率 | {self._fmt(fundamentals.get("dividend_yield"))} | 填息與收益吸引力的重要因素。 |
+| 月營收年增率 | {self._fmt(fundamentals.get("monthly_revenue_yoy"))}% | 營運是否改善的滯後確認。 |
+
+判讀：EPS、股利殖利率與月營收用來支撐估值分數；但航運股仍需和運價同步看。
+"""
+
+
+def _e_institutional_evidence_table(inst: dict[str, Any]) -> str:
+    flow = inst.get("flow_sums") or {}
+
+    def value(key: str, period: str) -> str:
+        return _e_lots((flow.get(key) or {}).get(period))
+
+    trend = inst.get("consecutive_trend") or {}
+    return f"""## 法人籌碼證據
+
+| 項目 | 內容 |
+|---|---|
+| 最新資料 | {_e_inst_line(inst)} |
+| 連續趨勢 | {_e_label(trend.get("direction"))}，{trend.get("days", "資料不足")} 日 |
+| 單位說明 | FinMind 原始資料為「股」，報告已換算成「張」。 |
+
+| 類別 | 近 1 日 | 近 3 日 | 近 5 日 | 近 10 日 |
+|---|---:|---:|---:|---:|
+| 外資 | {value("foreign", "1d")} | {value("foreign", "3d")} | {value("foreign", "5d")} | {value("foreign", "10d")} |
+| 投信 | {value("trust", "1d")} | {value("trust", "3d")} | {value("trust", "5d")} | {value("trust", "10d")} |
+| 自營商 | {value("dealer", "1d")} | {value("dealer", "3d")} | {value("dealer", "5d")} | {value("dealer", "10d")} |
+| 三大法人合計 | {value("total", "1d")} | {value("total", "3d")} | {value("total", "5d")} | {value("total", "10d")} |
+
+判讀：外資、投信、自營商若同步賣超，會提高風險；若外資賣但投信或 ETF 承接，偏向換手而非單純看空。
+"""
+
+
+def _e_revised_score_table(revised: dict[str, Any], timing_note: str) -> str:
+    return f"""## 修正後信心分數
+
+| 分數項目 | 分數 | 角色 |
+|---|---:|---|
+| 方向分數 | {revised.get("direction_score")} | 判斷偏多或偏空。 |
+| 時機分數 | {revised.get("timing_score")} | 判斷現在適不適合追價或賣出。 |
+| 估值分數 | {revised.get("valuation_score")} | 判斷價格是否仍合理。 |
+| 風險分數 | {revised.get("risk_score")} | 判斷是否應降低操作強度。 |
+| 資料覆蓋率 | {revised.get("data_coverage")} | 衡量資料完整度。 |
+| 資料可信度 | {revised.get("truthfulness_score")} | 衡量 exact / scraped / inferred / missing 的品質。 |
+| 綜合分數 | {revised.get("overall_score")} | 綜合決策參考，不是單獨買賣訊號。 |
+
+解讀：{timing_note}
+"""
+
+
+def _e_data_quality_table(scores: dict[str, Any], truth: dict[str, Any], data_quality: dict[str, Any], gaps: list[str]) -> str:
+    return f"""## 資料品質與限制
+
+| 項目 | 數值 | 說明 |
+|---|---:|---|
+| 資料可信度 | {truth.get("truthfulness_score")}/100 | 越高代表報告越依賴可驗證資料。 |
+| 資料覆蓋率 | {scores.get("data_coverage")}% | 越高代表核心資料越完整。 |
+| 精確資料 | {len(data_quality.get("exact_data") or [])} | API、官方或可直接驗證數據。 |
+| 爬取資料 | {len(data_quality.get("scraped_data") or [])} | 從網頁擷取的資料。 |
+| 搜尋推論資料 | {len(data_quality.get("search_inferred_data") or [])} | 只能作為輔助，不應當成 exact data。 |
+| 缺漏資料 | {len(data_quality.get("missing_data") or [])} | 會降低信心與操作強度。 |
+| 最大資料缺口 | {", ".join(gaps) if gaps else "無核心缺口"} | 影響本次結論上限。 |
+
+重要限制：搜尋推論不等於精確資料；ETF 與市場環境若只有推論，不能大幅加分。
+"""
+
+
 def _e_freight_cache_lines(freight: dict[str, Any]) -> str:
     if not freight.get("cache_used"):
         return "- 快取補齊：否，本次報告以本次抓取與推論資料為主。"
@@ -3712,64 +4041,31 @@ def _e_compose_report(
 
     return brief + f"""
 
-## 今日操作建議
-- 建議：{action_plan["recommendation"]}
-- 建議張數：{action_plan["suggested_lots"]} 張
-- 理由：{action_plan["reason"]}
-- 觸發條件：{action_plan["trigger"]}
-- 失效條件：{action_plan["invalidated_by"]}
-- 短線提醒：{timing_note}
+{_e_action_table(action_plan, timing_note)}
 
 {_e_position_section(self, mode, position, action_plan)}
 
-## 核心證據總表
-- 股價與技術：收盤價 {self._fmt(stock.get("close"))}，20 日均線 {self._fmt(stock.get("ma20"))}，60 日均線 {self._fmt(stock.get("ma60"))}，相對強弱指標（RSI）{self._fmt((stock.get("technical") or {}).get("rsi14"))}。
-- 運價：SCFI {self._fmt(freight.get("scfi_latest"))}，週變化 {self._fmt(freight.get("weekly_change"))}%，連續週數 {self._fmt(freight.get("scfi_streak_weeks"))}，運價方向{_e_label(freight_intel.get("overall_trend"))}。
-- 法人：{_e_inst_line(inst)}。
-- 基本面：每股盈餘（EPS）{self._fmt(fundamentals.get("eps"))}，股利殖利率 {self._fmt(fundamentals.get("dividend_yield"))}，月營收年增率 {self._fmt(fundamentals.get("monthly_revenue_yoy"))}%。
-- ETF：{_e_label((market.get("etf_flow") or {}).get("etf_flow"))}，信心 {(market.get("etf_flow") or {}).get("confidence", 0)}，但精確持股與基金規模變化仍有限制。
-- 市場環境：{_e_label((market.get("market_regime") or {}).get("market_regime"))}，信心 {(market.get("market_regime") or {}).get("confidence", 0)}。
+{_e_scenario_table(stock, freight, inst, action_plan)}
 
-## 股價與技術面證據
-- 股價資料日期：{freshness.get("price_data_date") or "資料不足"}
-- 分析時間：{freshness.get("analysis_time") or "資料不足"}
-- 是否即時資料：{"是" if freshness.get("is_realtime_price") else "否"}
-- 是否收盤資料：{"是" if freshness.get("is_closing_price") else "否"}
-- 收盤價：{self._fmt(stock.get("close"))}
-- 成交量：{self._fmt(stock.get("volume"))}
-- 20 日均線：{self._fmt(stock.get("ma20"))}
-- 60 日均線：{self._fmt(stock.get("ma60"))}
-- 支撐區：{self._fmt(stock.get("support_20d"))}
-- 壓力區：{self._fmt(stock.get("resistance_20d"))}
-- 相對強弱指標（RSI）：{self._fmt((stock.get("technical") or {}).get("rsi14"))}
-- 指數平滑異同移動平均線（MACD）：{self._fmt((stock.get("technical") or {}).get("macd"))}
-- 證據判讀：股價相對均線決定方向分數；RSI 過高會降低時機分數，避免追高。
+{_e_price_zone_table(stock, action_plan)}
 
-## 運價與航運景氣證據
-- SCFI 最新值：{self._fmt(freight.get("scfi_latest"))}
-- SCFI 週變化：{self._fmt(freight.get("weekly_change"))}%
-- SCFI 連續上漲/下跌週數：{self._fmt(freight.get("scfi_streak_weeks"))}
-- 美西線：{self._fmt(freight.get("us_west"))}，週變化 {self._fmt(freight.get("us_west_weekly_change"))}%
-- 美東線：{self._fmt(freight.get("us_east"))}，週變化 {self._fmt(freight.get("us_east_weekly_change"))}%
-- 歐洲線：{self._fmt(freight.get("europe"))}，週變化 {self._fmt(freight.get("europe_weekly_change"))}%
-- 運價智慧判讀：方向{_e_label(freight_intel.get("overall_trend"))}，強度{_e_label(freight_intel.get("strength"))}，信心 {freight_intel.get("confidence", 0)}，來源數 {freight_intel.get("source_count", 0)}。
-{_e_freight_cache_lines(freight)}
-- 對長榮的意義：{_e_freight_meaning(freight, freight_intel)}
+{_e_fact_inference_sections(market, action_plan)}
 
-## 法人籌碼證據
-- 最新資料：{_e_inst_line(inst)}
-- 連續趨勢：{_e_label((inst.get("consecutive_trend") or {}).get("direction"))}，{(inst.get("consecutive_trend") or {}).get("days", "資料不足")} 日
-{_e_flow_lines(inst)}
-- 單位說明：FinMind 原始資料為「股」，報告已換算成「張」。
-- 證據判讀：外資、投信、自營商若同步賣超，會提高風險；若外資賣但投信或 ETF 承接，偏向換手而非單純看空。
+{_e_strategy_discipline_table(market, action_plan, summary)}
 
-## 基本面與股利證據
-- 每股盈餘（EPS）：{self._fmt(fundamentals.get("eps"))}
-- 本益比（PER）：{self._fmt(fundamentals.get("per"))}
-- 股價淨值比（PBR）：{self._fmt(fundamentals.get("pbr"))}
-- 股利殖利率：{self._fmt(fundamentals.get("dividend_yield"))}
-- 月營收年增率：{self._fmt(fundamentals.get("monthly_revenue_yoy"))}%
-- 證據判讀：EPS、股利殖利率與月營收用來支撐估值分數；但航運股仍需和運價同步看。
+{_e_institutional_table(inst)}
+
+{_e_score_breakdown_table(scores, freight, inst, market)}
+
+{_e_core_evidence_table(self, stock, freight, freight_intel, inst, fundamentals, market)}
+
+{_e_technical_table(self, stock, freshness)}
+
+{_e_freight_evidence_table(self, freight, freight_intel, freshness.get("analysis_time") or "")}
+
+{_e_institutional_evidence_table(inst)}
+
+{_e_fundamental_table(self, fundamentals)}
 
 {self._decision_modules_markdown(market)}
 
@@ -3791,25 +4087,9 @@ def _e_compose_report(
 ### 最終判斷
 - {one_line}
 
-## 修正後信心分數
-- 方向分數：{revised.get("direction_score")}
-- 時機分數：{revised.get("timing_score")}
-- 估值分數：{revised.get("valuation_score")}
-- 風險分數：{revised.get("risk_score")}
-- 資料覆蓋率：{revised.get("data_coverage")}
-- 資料可信度：{revised.get("truthfulness_score")}
-- 綜合分數：{revised.get("overall_score")}
-- 解讀：{timing_note}
+{_e_revised_score_table(revised, timing_note)}
 
-## 資料品質與限制
-- 資料可信度：{truth.get("truthfulness_score")}/100
-- 資料覆蓋率：{scores.get("data_coverage")}%
-- 精確資料筆數：{len(data_quality.get("exact_data") or [])}
-- 爬取資料筆數：{len(data_quality.get("scraped_data") or [])}
-- 搜尋推論資料筆數：{len(data_quality.get("search_inferred_data") or [])}
-- 缺漏資料筆數：{len(data_quality.get("missing_data") or [])}
-- 最大資料缺口：{", ".join(gaps) if gaps else "無核心缺口"}
-- 重要限制：搜尋推論不等於精確資料；ETF 與市場環境若只有推論，不能大幅加分。
+{_e_data_quality_table(scores, truth, data_quality, gaps)}
 
 {_e_quality_examples(data_quality, truth)}
 
@@ -3922,6 +4202,69 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
             return f"僅趨勢推論，信心 {fmt(route_intel.get('confidence'))}"
         return "資料不足"
 
+    def scfi_source_note() -> str:
+        if freight.get("official_single_index_used"):
+            return f"SSE 官方單期頁，資料日 {fmt(freight.get('latest_date'))}"
+        if freight.get("official_chart_parsed"):
+            return "SSE 官方圖表 OCR"
+        if freight.get("csv_exact_used"):
+            return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}"
+        if freight.get("search_intelligence"):
+            return "搜尋 / 公開網頁交叉確認"
+        if freight.get("cache_used"):
+            return f"Supabase / 本機快取，資料日 {fmt(freight.get('cache_data_date'))}"
+        return "資料不足"
+
+    def route_source_note(route: str) -> str:
+        cache_fields = set(freight.get("cache_filled_fields") or [])
+        has_route_value = freight.get(route) is not None or freight.get(f"{route}_weekly_change") is not None
+        if freight.get("official_route_exact_used"):
+            return f"SSE 官方單期頁，資料日 {fmt(freight.get('latest_date'))}"
+        if freight.get("csv_exact_used") and has_route_value and route in {"us_west", "us_east", "europe"}:
+            source = freight.get("verified_route_source") or "data/scfi_routes.csv"
+            return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}，來源 {source}"
+        if route in cache_fields or f"{route}_weekly_change" in cache_fields:
+            return f"Supabase / 本機快取，資料日 {fmt(freight.get('cache_data_date'))}"
+        if has_route_value and freight.get("search_intelligence"):
+            return "搜尋 / 公開網頁交叉確認，需複核"
+        route_intel = (freight_intel.get(route) or {})
+        if route_intel.get("trend") and route_intel.get("trend") != "unknown":
+            return f"僅趨勢推論，信心 {fmt(route_intel.get('confidence'))}"
+        return "資料不足"
+
+    def source_time_note(data_date: Any) -> str:
+        analysis_time = freshness.get("analysis_time") or payload.get("timestamp")
+        parts = []
+        if data_date:
+            parts.append(f"資料日 {fmt(data_date)}")
+        if analysis_time:
+            parts.append(f"本次抓取 {fmt(analysis_time)}")
+        return "；".join(parts) if parts else "時間不足"
+
+    def scfi_source_time() -> str:
+        if freight.get("official_single_index_used") or freight.get("official_chart_parsed"):
+            return source_time_note(freight.get("latest_date"))
+        if freight.get("csv_exact_used"):
+            return source_time_note(freight.get("csv_data_date"))
+        if freight.get("cache_used"):
+            return source_time_note(freight.get("cache_data_date"))
+        return source_time_note(None)
+
+    def route_source_time(route: str) -> str:
+        has_route_value = freight.get(route) is not None or freight.get(f"{route}_weekly_change") is not None
+        cache_fields = set(freight.get("cache_filled_fields") or [])
+        if not has_route_value:
+            return "時間不足"
+        if freight.get("official_route_exact_used"):
+            return source_time_note(freight.get("latest_date"))
+        if freight.get("csv_exact_used") and route in {"us_west", "us_east", "europe"}:
+            return source_time_note(freight.get("csv_data_date"))
+        if route in cache_fields or f"{route}_weekly_change" in cache_fields:
+            return source_time_note(freight.get("cache_data_date"))
+        if freight.get("search_intelligence"):
+            return source_time_note(freight.get("latest_date") or freight.get("csv_data_date"))
+        return source_time_note(None)
+
     def flow_line(key: str, label: str) -> str:
         row = flows.get(key) or {}
         if not row:
@@ -3969,7 +4312,15 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
     official_route_status = (
         "已從官方頁取得主要航線精確數字"
         if freight.get("official_route_exact_used")
-        else "官方頁本次未公開可解析的主要航線數字，改用其他已標示來源"
+        else "官方頁有列出歐洲、美西、美東等航線名稱與權重，但本次公開文字未提供可解析的上期/本期航線運價數字"
+    )
+    scfi_adopted_source = "SSE 官方單期頁" if freight.get("official_single_index_used") else "其他備援來源"
+    route_adopted_source = (
+        "SSE 官方單期頁"
+        if freight.get("official_route_exact_used")
+        else "CSV 備援航線資料" if freight.get("csv_exact_used")
+        else "搜尋 / 公開網頁交叉確認" if freight.get("search_intelligence")
+        else "資料不足"
     )
     csv_status = (
         f"已使用，資料日 {fmt(freight.get('csv_data_date'))}，來源 {freight.get('verified_route_source') or 'data/scfi_routes.csv'}"
@@ -4040,15 +4391,15 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 
 ### 3. SCFI 與主要航線
 
-| 項目 | 數值 | 週變化 |
-|---|---:|---:|
-| SCFI 綜合指數 | {fmt(freight.get("scfi_latest"))} | {pct(freight.get("weekly_change"))} |
-| SCFI 連續週數 | {fmt(freight.get("scfi_streak_weeks"), 0)} | - |
-| 美西線 | {fmt(freight.get("us_west"))} | {pct(freight.get("us_west_weekly_change"))} |
-| 美東線 | {fmt(freight.get("us_east"))} | {pct(freight.get("us_east_weekly_change"))} |
-| 歐洲線 | {fmt(freight.get("europe"))} | {pct(freight.get("europe_weekly_change"))} |
-| 地中海線 | {fmt(freight.get("mediterranean"))} | - |
-| 亞洲區域線 | {fmt(freight.get("asia_regional"))} | - |
+| 項目 | 數值 | 週變化 | 採用來源 | 來源時間 |
+|---|---:|---:|---|---|
+| SCFI 綜合指數 | {fmt(freight.get("scfi_latest"))} | {pct(freight.get("weekly_change"))} | {scfi_source_note()} | {scfi_source_time()} |
+| SCFI 連續週數 | {fmt(freight.get("scfi_streak_weeks"), 0)} | - | {scfi_source_note()} | {scfi_source_time()} |
+| 美西線 | {fmt(freight.get("us_west"))} | {pct(freight.get("us_west_weekly_change"))} | {route_source_note("us_west")} | {route_source_time("us_west")} |
+| 美東線 | {fmt(freight.get("us_east"))} | {pct(freight.get("us_east_weekly_change"))} | {route_source_note("us_east")} | {route_source_time("us_east")} |
+| 歐洲線 | {fmt(freight.get("europe"))} | {pct(freight.get("europe_weekly_change"))} | {route_source_note("europe")} | {route_source_time("europe")} |
+| 地中海線 | {fmt(freight.get("mediterranean"))} | - | {route_source_note("mediterranean")} | {route_source_time("mediterranean")} |
+| 亞洲區域線 | {fmt(freight.get("asia_regional"))} | - | {route_source_note("asia_regional")} | {route_source_time("asia_regional")} |
 
 - 運價方向：{label(freight_intel.get("overall_trend"))}
 - 運價強度：{label(freight_intel.get("strength"))}
@@ -4064,12 +4415,24 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 | 美東線 | {route_quality("us_east")} |
 | 歐洲線 | {route_quality("europe")} |
 
-#### 本次運價網頁讀取狀態
+#### 最終採用資料來源
+
+這裡看「最後報告採用哪個來源」。SSE 官方頁成功讀到 SCFI 綜合指數；美西、美東、歐洲線本次不是從 SSE 官方頁直接取得，而是由下表標示的備援來源補齊。
+
+| 資料項目 | 最終採用來源 | 是否為 SSE 官方直接數字 | 本次採用值 | 來源時間 |
+|---|---|---|---:|---|
+| SCFI 綜合指數 | {scfi_adopted_source} | {"是" if freight.get("official_single_index_used") else "否"} | {fmt(freight.get("scfi_latest"))} | {scfi_source_time()} |
+| SCFI 週變化 | {scfi_adopted_source} | {"是" if freight.get("official_single_index_used") else "否"} | {pct(freight.get("weekly_change"))} | {scfi_source_time()} |
+| 美西線 | {route_adopted_source} | {"是" if freight.get("official_route_exact_used") else "否"} | {fmt(freight.get("us_west"))} / {pct(freight.get("us_west_weekly_change"))} | {route_source_time("us_west")} |
+| 美東線 | {route_adopted_source} | {"是" if freight.get("official_route_exact_used") else "否"} | {fmt(freight.get("us_east"))} / {pct(freight.get("us_east_weekly_change"))} | {route_source_time("us_east")} |
+| 歐洲線 | {route_adopted_source} | {"是" if freight.get("official_route_exact_used") else "否"} | {fmt(freight.get("europe"))} / {pct(freight.get("europe_weekly_change"))} | {route_source_time("europe")} |
+
+#### 讀取與備援狀態
 
 | 來源 / 方法 | 是否讀取 | 本次讀到什麼 | 報告如何使用 |
 |---|---|---|---|
 | SSE 官方單期頁 | {"成功" if freight.get("official_single_index_used") else "未成功"} | {official_single_status} | 作為 SCFI 綜合指數與資料日期的官方來源 |
-| SSE 官方主要航線 | {"成功" if freight.get("official_route_exact_used") else "未取得"} | {official_route_status} | 若官方頁未提供航線數字，不會假裝是官方資料 |
+| SSE 官方主要航線 | {"成功" if freight.get("official_route_exact_used") else "未取得精確運價"} | {official_route_status} | 只確認航線名稱/權重；若沒有運價數字，不會假裝是官方航線運價 |
 | CSV 備援航線資料 | {"成功" if freight.get("csv_exact_used") else "未使用"} | {csv_status} | 補齊美西、美東、歐洲線數字，並在航線品質表標示 CSV 來源 |
 | 搜尋 / 公開網頁交叉確認 | {"有使用" if freight.get("search_intelligence") else "未使用"} | {search_status} | 只作方向、趨勢與背景，不當成官方精確數字 |
 | Playwright 截圖備援 | {"有截圖" if freight.get("search_screenshots") else "未截圖"} | {screenshot_status} | 只有文字抓不到時才作備援；失敗不影響主資料 |
