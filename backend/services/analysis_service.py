@@ -3577,7 +3577,8 @@ def _e_route_source_short(freight: dict[str, Any], route: str) -> str:
     if freight.get("official_route_exact_used"):
         return f"SSE 官方單期頁，資料日 {freight.get('latest_date') or '未知'}"
     if freight.get("csv_exact_used") and route in {"us_west", "us_east", "europe"}:
-        return f"CSV 備援，資料日 {freight.get('csv_data_date') or '未知'}"
+        label = "Supabase 雲端航線資料庫" if freight.get("supabase_route_used") else freight.get("route_storage_label") or "Repo 內建 CSV 航線資料"
+        return f"{label}，資料日 {freight.get('csv_data_date') or freight.get('supabase_route_date') or '未知'}"
     if freight.get("search_intelligence") and freight.get(route) is not None:
         return "公開新聞 / 搜尋交叉確認"
     return "資料不足"
@@ -3589,7 +3590,8 @@ def _e_scfi_source_short(freight: dict[str, Any]) -> str:
     if freight.get("official_chart_parsed"):
         return "SSE 官方圖表 OCR"
     if freight.get("csv_exact_used"):
-        return f"CSV 備援，資料日 {freight.get('csv_data_date') or '未知'}"
+        label = "Supabase 雲端航線資料庫" if freight.get("supabase_route_used") else freight.get("route_storage_label") or "Repo 內建 CSV 航線資料"
+        return f"{label}，資料日 {freight.get('csv_data_date') or freight.get('supabase_route_date') or '未知'}"
     if freight.get("search_intelligence"):
         return "公開新聞 / 搜尋交叉確認"
     return "資料不足"
@@ -4193,7 +4195,8 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
                 return f"SSE 官方單期頁本次公開資料取得，資料日 {fmt(freight.get('latest_date'))}"
             if freight.get("csv_exact_used"):
                 source = freight.get("verified_route_source") or "data/scfi_routes.csv"
-                return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}，來源 {source}"
+                label = "Supabase 雲端航線資料庫" if freight.get("supabase_route_used") else freight.get("route_storage_label") or "Repo 內建 CSV 航線資料"
+                return f"{label}，資料日 {fmt(freight.get('csv_data_date') or freight.get('supabase_route_date'))}，原始來源 {source}"
             if freight.get("search_intelligence"):
                 return "搜尋 / 公開頁本次抽取，需交叉確認"
             return "本次公開資料取得"
@@ -4204,13 +4207,27 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
             return f"僅趨勢推論，信心 {fmt(route_intel.get('confidence'))}"
         return "資料不足"
 
+    def route_storage_label() -> str:
+        if freight.get("supabase_route_used"):
+            return "Supabase 雲端航線資料庫"
+        if freight.get("route_storage_label"):
+            return str(freight.get("route_storage_label"))
+        return "Repo 內建 CSV 航線資料"
+
+    def route_storage_status_label() -> str:
+        if freight.get("supabase_route_used"):
+            return "Supabase 雲端航線資料庫"
+        if freight.get("csv_exact_used"):
+            return "Repo 內建 CSV 航線資料"
+        return "未使用航線備援資料"
+
     def scfi_source_note() -> str:
         if freight.get("official_single_index_used"):
             return f"SSE 官方單期頁，資料日 {fmt(freight.get('latest_date'))}"
         if freight.get("official_chart_parsed"):
             return "SSE 官方圖表 OCR"
         if freight.get("csv_exact_used"):
-            return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}"
+            return f"{route_storage_label()}，資料日 {fmt(freight.get('csv_data_date') or freight.get('supabase_route_date'))}"
         if freight.get("search_intelligence"):
             return "搜尋 / 公開網頁交叉確認"
         if freight.get("cache_used"):
@@ -4224,7 +4241,7 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
             return f"SSE 官方單期頁，資料日 {fmt(freight.get('latest_date'))}"
         if freight.get("csv_exact_used") and has_route_value and route in {"us_west", "us_east", "europe"}:
             source = freight.get("verified_route_source") or "data/scfi_routes.csv"
-            return f"CSV 備援資料，資料日 {fmt(freight.get('csv_data_date'))}，來源 {source}"
+            return f"{route_storage_label()}，資料日 {fmt(freight.get('csv_data_date') or freight.get('supabase_route_date'))}，原始來源 {source}"
         if route in cache_fields or f"{route}_weekly_change" in cache_fields:
             return f"Supabase / 本機快取，資料日 {fmt(freight.get('cache_data_date'))}"
         if has_route_value and freight.get("search_intelligence"):
@@ -4320,12 +4337,12 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
     route_adopted_source = (
         "SSE 官方單期頁"
         if freight.get("official_route_exact_used")
-        else "CSV 備援航線資料" if freight.get("csv_exact_used")
+        else route_storage_label() if freight.get("csv_exact_used")
         else "搜尋 / 公開網頁交叉確認" if freight.get("search_intelligence")
         else "資料不足"
     )
     csv_status = (
-        f"已使用，資料日 {fmt(freight.get('csv_data_date'))}，來源 {freight.get('verified_route_source') or 'data/scfi_routes.csv'}"
+        f"已使用，儲存位置 {route_storage_status_label()}，資料日 {fmt(freight.get('csv_data_date') or freight.get('supabase_route_date'))}，原始來源 {freight.get('verified_route_source') or 'data/scfi_routes.csv'}"
         if freight.get("csv_exact_used")
         else "未使用或已過期"
     )
@@ -4410,8 +4427,9 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 - 運價信心：{fmt(freight_intel.get("confidence"))}
 - 來源數量：{fmt(freight_intel.get("source_count"), 0)}
 - 精確主要航線筆數：{fmt(freight_intel.get("exact_route_count"), 0)}
-- CSV 資料日期：{fmt(freight.get("csv_data_date"))}
-- CSV 是否過期：{"是" if freight.get("csv_stale") else "否" if freight.get("csv_stale") is False else "未使用 CSV"}
+- 航線備援儲存位置：{route_storage_status_label()}
+- 航線備援資料日期：{fmt(freight.get("csv_data_date") or freight.get("supabase_route_date"))}
+- 航線備援是否過期：{"是" if freight.get("csv_stale") else "否" if freight.get("csv_stale") is False else "未使用航線備援"}
 
 | 航線 | 資料品質判定 |
 |---|---|
@@ -4437,7 +4455,7 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 |---|---|---|---|
 | SSE 官方單期頁 | {"成功" if freight.get("official_single_index_used") else "未成功"} | {official_single_status} | 作為 SCFI 綜合指數與資料日期的官方來源 |
 | SSE 官方主要航線 | {"成功" if freight.get("official_route_exact_used") else "未取得精確運價"} | {official_route_status} | 只確認航線名稱/權重；若沒有運價數字，不會假裝是官方航線運價 |
-| CSV 備援航線資料 | {"成功" if freight.get("csv_exact_used") else "未使用"} | {csv_status} | 補齊美西、美東、歐洲線數字，並在航線品質表標示 CSV 來源 |
+| 航線備援資料庫 | {"成功" if freight.get("csv_exact_used") else "未使用"} | {csv_status} | 可能來自 Supabase 雲端航線資料庫或 Repo 內建 CSV；報告會明確標示採用哪一個 |
 | 搜尋 / 公開網頁交叉確認 | {"有使用" if freight.get("search_intelligence") else "未使用"} | {search_status} | 只作方向、趨勢與背景，不當成官方精確數字 |
 | Playwright 截圖備援 | {"有截圖" if freight.get("search_screenshots") else "未截圖"} | {screenshot_status} | 只有文字抓不到時才作備援；失敗不影響主資料 |
 | Supabase / 本機快取 | {"有使用" if freight.get("cache_used") else "未使用"} | {cache_status} | 只在官方 / CSV / 搜尋不足時補位 |

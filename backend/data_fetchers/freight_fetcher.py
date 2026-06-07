@@ -77,8 +77,12 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
             sources.append(supabase_route_source)
             data["supabase_route_used"] = True
             data["supabase_route_date"] = latest.get("date")
+            data["route_storage_source"] = "supabase"
+            data["route_storage_label"] = "Supabase 雲端航線資料庫"
         else:
             sources.append(csv_source)
+            data["route_storage_source"] = "repo_csv"
+            data["route_storage_label"] = "Repo 內建 CSV 航線資料"
         csv_data = _row_to_data(latest)
         csv_row_date = csv_data.get("latest_date")
         if data.get("latest_date") and csv_data.get("latest_date"):
