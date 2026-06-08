@@ -104,6 +104,7 @@ OPENAI_TIMEOUT_SECONDS=300
 OPENAI_MAX_OUTPUT_TOKENS=6000
 FINMIND_TOKEN=your_finmind_token
 NEWS_API_KEY=your_newsapi_key
+EIA_API_KEY=
 SERPAPI_API_KEY=
 TAVILY_API_KEY=
 BRAVE_SEARCH_API_KEY=
@@ -143,6 +144,27 @@ If the selected model is not enabled for your OpenAI account, the backend falls 
 - Announcements: TWSE OpenAPI / MOPS current material information
 - News: NewsAPI if configured; Web Search Intelligence fallback
 - Freight: official SSE SCFI chart OCR, `data/scfi_routes.csv`, Web Search Intelligence fallback, and manual advanced fields
+- International events: Google News RSS, public search fallback, Yahoo/Stooq oil price fallback, and EIA oil price API if configured
+
+## Data Source Routing and Time Labels
+
+Every report now separates source quality more explicitly:
+
+- Official/API data: exchange, FinMind, EIA, or other structured API data.
+- Public chart/CSV data: Yahoo Finance, Stooq, or public CSV endpoints.
+- RSS/Search inferred data: Google News RSS and public search snippets. These can support context, but they are not exact numeric data.
+- Screenshot/OCR data: only used when a public page has no parseable table or API response.
+- Cached or Supabase data: used as a fallback and always labeled with the source date and fetch time.
+
+Report source labels include:
+
+- data source
+- fetch method
+- data-as-of time
+- fetch time
+- whether the value is exact data or inferred context
+
+This is intentional: the tool should show both the conclusion and the evidence timing, so you can tell whether it is using fresh data, stale data, or a fallback.
 
 ## Web Search Intelligence Layer
 
@@ -397,8 +419,11 @@ Response includes:
 - OpenAI: required for AI report. Billing/credits must be active.
 - FinMind: recommended for Taiwan stock, institutional, and fundamental data.
 - NewsAPI: optional but recommended. Without it, the tool uses Google News RSS fallback.
+- EIA API: optional but recommended for WTI / Brent oil price data. Without it, the tool uses Yahoo Finance and Stooq fallback. You can request a free key from EIA Open Data.
 - SerpAPI / Tavily / Brave Search: optional. Without them, the tool uses Google News RSS fallback.
 - TWSE OpenAPI / MOPS: current announcement fetcher does not require a key, but public endpoints may be limited.
+
+No registration is required for Google News RSS. It is useful for international events such as US policy, war risk, oil price headlines, and shipping disruptions, but the report labels it as RSS/search context rather than official numeric data.
 
 ## Why Data Missing Matters
 

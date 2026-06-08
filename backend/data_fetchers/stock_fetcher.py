@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -16,6 +16,17 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _today_taipei() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).date().isoformat()
+
+
+def _exchange_datetime(timestamp: int | float | None, gmtoffset: int | None = None) -> datetime | None:
+    if not timestamp:
+        return None
+    exchange_timezone = timezone(timedelta(seconds=gmtoffset or 0))
+    return datetime.fromtimestamp(float(timestamp), exchange_timezone)
 
 
 def _enrich_technical(rows: list[dict[str, Any]], missing: list[str]) -> dict[str, Any]:
@@ -164,11 +175,13 @@ def fetch_stock_data(symbol: str) -> dict[str, Any]:
     if any(item.startswith("Data Missing: RSI") or item.startswith("Data Missing: MACD") or item.startswith("Data Missing: Bollinger") for item in missing):
         status = "partial"
 
-    realtime = _fetch_twse_realtime(symbol)
-    if realtime and realtime.get("date") == datetime.now().date().isoformat():
-        sources.append({"name": "TWSE MIS 即時行情", "url": "https://mis.twse.com.tw/stock/index.jsp", "as_of": realtime.get("time")})
+    realtime = _fetch_intraday_quote(symbol, settings)
+    if realtime and realtime.get("date") == _today_taipei():
+        sources.append({"name": realtime.get("source") or "盤中行情", "url": realtime.get("url"), "as_of": realtime.get("time")})
         close = realtime.get("price") or close
+        prev_close = realtime.get("previous_close") or prev_close
         volume = realtime.get("volume") or volume
+        change_pct = ((close - prev_close) / prev_close * 100) if close is not None and prev_close else change_pct
         latest["date"] = realtime.get("date") or latest["date"]
     else:
         realtime = None
@@ -183,7 +196,9 @@ def fetch_stock_data(symbol: str) -> dict[str, Any]:
             "volume": volume,
             "is_realtime_price": bool(realtime),
             "realtime_time": realtime.get("time") if realtime else None,
-            "realtime_source": "TWSE MIS" if realtime else None,
+            "realtime_source": realtime.get("source") if realtime else None,
+            "is_delayed_price": bool(realtime and realtime.get("is_delayed")),
+            "price_delay_note": realtime.get("delay_note") if realtime else None,
             "change_pct": change_pct,
             "ma20": ma20,
             "ma60": ma60,
@@ -194,7 +209,7 @@ def fetch_stock_data(symbol: str) -> dict[str, Any]:
             "exchange": meta.get("exchangeName"),
             "bars": rows[-90:],
         },
-        "sources": sources,
+        "sources": _dedupe_sources(sources),
         "missing": missing,
     }
 
@@ -252,10 +267,11 @@ def _fetch_finmind_stock(symbol: str, settings: Any) -> dict[str, Any]:
     if ma60 is None:
         missing.append("Data Missing: 60MA unavailable because FinMind history has fewer than 60 rows.")
     technical = _enrich_technical(bars, missing)
-    realtime = _fetch_twse_realtime(symbol)
-    if realtime and realtime.get("date") == datetime.now().date().isoformat():
-        sources.append({"name": "TWSE MIS 即時行情", "url": "https://mis.twse.com.tw/stock/index.jsp", "as_of": realtime.get("time")})
+    realtime = _fetch_intraday_quote(symbol, settings)
+    if realtime and realtime.get("date") == _today_taipei():
+        sources.append({"name": realtime.get("source") or "盤中行情", "url": realtime.get("url"), "as_of": realtime.get("time")})
         close = realtime.get("price") or close
+        prev_close = realtime.get("previous_close") or prev_close
         latest["date"] = realtime.get("date") or latest["date"]
     else:
         realtime = None
@@ -270,7 +286,9 @@ def _fetch_finmind_stock(symbol: str, settings: Any) -> dict[str, Any]:
             "volume": realtime.get("volume") if realtime and realtime.get("volume") is not None else latest["volume"],
             "is_realtime_price": bool(realtime),
             "realtime_time": realtime.get("time") if realtime else None,
-            "realtime_source": "TWSE MIS" if realtime else None,
+            "realtime_source": realtime.get("source") if realtime else None,
+            "is_delayed_price": bool(realtime and realtime.get("is_delayed")),
+            "price_delay_note": realtime.get("delay_note") if realtime else None,
             "change_pct": ((close - prev_close) / prev_close * 100) if prev_close else None,
             "ma20": ma20,
             "ma60": ma60,
@@ -281,9 +299,16 @@ def _fetch_finmind_stock(symbol: str, settings: Any) -> dict[str, Any]:
             "exchange": "TWSE/TPEx via FinMind",
             "bars": bars[-90:],
         },
-        "sources": sources,
+        "sources": _dedupe_sources(sources),
         "missing": missing,
     }
+
+
+def _fetch_intraday_quote(symbol: str, settings: Any) -> dict[str, Any] | None:
+    realtime = _fetch_twse_realtime(symbol)
+    if realtime:
+        return realtime
+    return _fetch_yahoo_intraday_quote(symbol, settings)
 
 
 def _fetch_twse_realtime(symbol: str) -> dict[str, Any] | None:
@@ -291,13 +316,14 @@ def _fetch_twse_realtime(symbol: str) -> dict[str, Any] | None:
     if not stock_id.isdigit():
         return None
     channels = [f"tse_{stock_id}.tw", f"otc_{stock_id}.tw"]
-    for channel in channels:
+    channel_queries = ["|".join(channels), *channels]
+    for channel in channel_queries:
         try:
             response = httpx.get(
                 "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
-                params={"ex_ch": channel, "json": "1", "delay": "0"},
+                params={"ex_ch": channel, "json": "1", "delay": "0", "_": str(int(datetime.now().timestamp() * 1000))},
                 headers={"Referer": "https://mis.twse.com.tw/stock/index.jsp", "User-Agent": "Mozilla/5.0"},
-                timeout=8.0,
+                timeout=12.0,
             )
             response.raise_for_status()
             rows = response.json().get("msgArray") or []
@@ -310,6 +336,8 @@ def _fetch_twse_realtime(symbol: str) -> dict[str, Any] | None:
         if price is None or price <= 0:
             continue
         volume = _safe_float(row.get("v"))
+        if volume is not None and 0 < volume < 1_000_000:
+            volume *= 1000
         date_raw = str(row.get("d") or "")
         time_raw = str(row.get("t") or "")
         date_text = f"{date_raw[:4]}-{date_raw[4:6]}-{date_raw[6:]}" if len(date_raw) == 8 else None
@@ -324,6 +352,73 @@ def _fetch_twse_realtime(symbol: str) -> dict[str, Any] | None:
             "date": date_text,
             "time": f"{date_text} {time_text}".strip() if date_text or time_text else None,
             "channel": channel,
+            "source": "TWSE MIS 即時行情",
+            "url": "https://mis.twse.com.tw/stock/index.jsp",
+            "is_delayed": False,
+            "delay_note": "TWSE MIS 即時行情。",
+        }
+    return None
+
+
+def _dedupe_sources(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[Any, Any, Any]] = set()
+    for source in sources:
+        key = (source.get("name"), source.get("url"), source.get("as_of"))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(source)
+    return output
+
+
+def _fetch_yahoo_intraday_quote(symbol: str, settings: Any) -> dict[str, Any] | None:
+    for host in YAHOO_HOSTS:
+        try:
+            response = httpx.get(
+                f"https://{host}/v8/finance/chart/{symbol}",
+                params={"range": "1d", "interval": "1m"},
+                headers=HEADERS,
+                timeout=httpx.Timeout(settings.request_timeout, connect=15.0, read=settings.request_timeout, write=15.0, pool=15.0),
+            )
+            response.raise_for_status()
+            result = response.json()["chart"]["result"][0]
+        except Exception:
+            continue
+        meta = result.get("meta") or {}
+        timestamps = result.get("timestamp") or []
+        quote = (result.get("indicators", {}).get("quote") or [{}])[0]
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+        latest_index = None
+        for index in range(len(timestamps) - 1, -1, -1):
+            if index < len(closes) and _safe_float(closes[index]) is not None:
+                latest_index = index
+                break
+        if latest_index is None:
+            continue
+        ts = timestamps[latest_index]
+        gmtoffset = _safe_float(meta.get("gmtoffset"))
+        if (gmtoffset is None or gmtoffset == 0) and symbol.upper().endswith((".TW", ".TWO")):
+            gmtoffset = 8 * 60 * 60
+        exchange_dt = _exchange_datetime(ts, gmtoffset)
+        price = _safe_float(closes[latest_index])
+        volume = _safe_float(meta.get("regularMarketVolume"))
+        if volume is None and latest_index < len(volumes):
+            volume = _safe_float(volumes[latest_index])
+        previous_close = _safe_float(meta.get("chartPreviousClose")) or _safe_float(meta.get("previousClose"))
+        if not price or not exchange_dt:
+            continue
+        return {
+            "price": price,
+            "volume": volume,
+            "previous_close": previous_close,
+            "date": exchange_dt.date().isoformat(),
+            "time": exchange_dt.isoformat(timespec="seconds"),
+            "source": "Yahoo Finance 盤中延遲行情",
+            "url": f"https://finance.yahoo.com/quote/{symbol}",
+            "is_delayed": True,
+            "delay_note": "TWSE MIS 未取得時使用 Yahoo Finance 1 分鐘盤中/延遲行情，不等同券商即時報價。",
         }
     return None
 

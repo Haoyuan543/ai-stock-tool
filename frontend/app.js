@@ -304,13 +304,22 @@ function renderMarkdown(markdown) {
   let html = "";
   let inList = false;
   let sectionIndex = 0;
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (isMarkdownTable(lines, i)) {
+      if (inList) html += "</ul>";
+      inList = false;
+      const parsed = renderMarkdownTable(lines, i);
+      html += parsed.html;
+      i = parsed.nextIndex - 1;
+      continue;
+    }
     if (line.startsWith("## ")) {
       if (inList) html += "</ul>";
       inList = false;
       const title = line.slice(3);
       sectionIndex += 1;
-      const cls = sectionIndex <= 4 || title.includes("Decision Brief") || title.includes("今日操作建議") || title.includes("國際事件") ? " key-section" : "";
+      const cls = sectionIndex <= 5 || title.includes("決策摘要") || title.includes("關鍵指標") || title.includes("盤中現況") || title.includes("今日操作建議") || title.includes("國際事件") ? " key-section" : "";
       html += `<h2 class="${cls.trim()}">${formatInline(title)}</h2>`;
     } else if (line.startsWith("### ")) {
       if (inList) html += "</ul>";
@@ -325,6 +334,10 @@ function renderMarkdown(markdown) {
       inList = true;
       const item = line.replace(/^\d+\.\s/, "").replace(/^- /, "");
       html += `<li>${formatInline(item)}</li>`;
+    } else if (line.startsWith("> ")) {
+      if (inList) html += "</ul>";
+      inList = false;
+      html += `<blockquote>${formatInline(line.slice(2))}</blockquote>`;
     } else if (!line.trim()) {
       if (inList) html += "</ul>";
       inList = false;
@@ -336,6 +349,35 @@ function renderMarkdown(markdown) {
   }
   if (inList) html += "</ul>";
   reportOutput.innerHTML = html;
+}
+
+function isMarkdownTable(lines, index) {
+  const header = lines[index] || "";
+  const separator = lines[index + 1] || "";
+  return header.trim().startsWith("|")
+    && separator.trim().startsWith("|")
+    && /\|\s*:?-{3,}:?\s*\|/.test(separator);
+}
+
+function renderMarkdownTable(lines, startIndex) {
+  const tableLines = [];
+  let index = startIndex;
+  while (index < lines.length && lines[index].trim().startsWith("|")) {
+    tableLines.push(lines[index]);
+    index += 1;
+  }
+  const headerCells = splitMarkdownRow(tableLines[0]);
+  const bodyLines = tableLines.slice(2);
+  const thead = `<thead><tr>${headerCells.map((cell) => `<th>${formatInline(cell)}</th>`).join("")}</tr></thead>`;
+  const tbody = `<tbody>${bodyLines.map((row) => {
+    const cells = splitMarkdownRow(row);
+    return `<tr>${cells.map((cell) => `<td>${formatInline(cell)}</td>`).join("")}</tr>`;
+  }).join("")}</tbody>`;
+  return { html: `<div class="table-wrap"><table>${thead}${tbody}</table></div>`, nextIndex: index };
+}
+
+function splitMarkdownRow(row) {
+  return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
 }
 
 function formatInline(value) {
@@ -375,6 +417,11 @@ function buildStandaloneHtml(symbol, timestamp) {
     h2 { margin-top: 24px; border-top: 1px solid #d8d0c2; padding-top: 14px; font-size: 20px; }
     ul { padding-left: 22px; }
     a { color: #0f766e; }
+    blockquote { margin: 12px 0; border-left: 5px solid #a16207; background: #fff6df; padding: 10px 12px; color: #594a35; }
+    .table-wrap { overflow-x: auto; margin: 12px 0 18px; border: 1px solid #d8d0c2; background: #fff; }
+    table { width: 100%; min-width: 680px; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid #d8d0c2; padding: 9px 10px; text-align: left; vertical-align: top; }
+    th { color: #66717a; background: #fafbfc; font-weight: 800; }
     @media print { body { background: #fff; } main { padding: 0; } header, section { break-inside: avoid; } }
   </style>
 </head>

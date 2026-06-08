@@ -28,6 +28,7 @@ from backend.services.news_relevance_filter import filter_relevant_news
 from backend.services.prediction_tracker import record_prediction
 from backend.services.prompt_builder import build_analysis_prompt
 from backend.services.red_sea_intelligence import build_red_sea_intelligence
+from backend.services.source_registry import source_summary_lines
 from backend.services.truthfulness_engine import build_truthfulness
 
 
@@ -182,6 +183,7 @@ class AnalysisService:
             summary["one_line"] = "OpenAI 未成功完成分析，系統不輸出本機模板投資結論，避免誤導。"
         final_report = self._enforce_freight_report_consistency(final_report, prompt_payload)
         final_report = self._sanitize_report_language(final_report)
+        final_report = self._ensure_source_timestamp_section(final_report, prompt_payload)
         clean_warnings = [self._user_message(item) for item in payload["missing"]]
 
         result = {
@@ -676,10 +678,10 @@ class AnalysisService:
 
     def _merge_sources(self, *parts: dict[str, Any]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        seen: set[tuple[Any, Any]] = set()
+        seen: set[tuple[Any, Any, Any, Any]] = set()
         for part in parts:
             for source in part.get("sources", []):
-                key = (source.get("name"), source.get("url"))
+                key = (source.get("name"), source.get("url"), source.get("as_of") or source.get("data_as_of"), source.get("method"))
                 if key not in seen:
                     seen.add(key)
                     out.append(source)
@@ -692,10 +694,10 @@ class AnalysisService:
         return self._dedupe_sources(sources + extra)
 
     def _dedupe_sources(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        seen: set[tuple[Any, Any]] = set()
+        seen: set[tuple[Any, Any, Any, Any]] = set()
         out: list[dict[str, Any]] = []
         for row in rows:
-            key = (row.get("name"), row.get("url"))
+            key = (row.get("name"), row.get("url"), row.get("as_of") or row.get("data_as_of"), row.get("method"))
             if key in seen:
                 continue
             seen.add(key)
@@ -1472,15 +1474,21 @@ def _clean_data_freshness(self: AnalysisService, stock: dict[str, Any]) -> dict[
     price_date = stock.get("latest_date")
     today = analysis_time.date().isoformat()
     warning = ""
-    if price_date and price_date != today:
+    is_realtime = bool(stock.get("is_realtime_price"))
+    if is_realtime:
+        warning = stock.get("price_delay_note") or ""
+    elif price_date and price_date != today:
         warning = "價格資料非今日，僅供參考，不適合即時決策。若為前一交易日資料，請以收盤資料解讀。"
     if not price_date:
         warning = "Data Missing: 無法確認股價資料日期。"
     return {
         "analysis_time": analysis_time.isoformat(timespec="seconds"),
         "price_data_date": price_date or "Data Missing",
-        "is_realtime_price": False,
-        "is_closing_price": True,
+        "is_realtime_price": is_realtime,
+        "is_closing_price": not is_realtime,
+        "realtime_time": stock.get("realtime_time"),
+        "realtime_source": stock.get("realtime_source"),
+        "is_delayed_price": bool(stock.get("is_delayed_price")),
         "warning": warning,
     }
 
@@ -4000,6 +4008,125 @@ def _e_modules(self: AnalysisService, market: dict[str, Any]) -> str:
 - 風險：{", ".join(fill.get("risks") or []) or "資料不足"}"""
 
 
+def _e_intraday_context(stock: dict[str, Any], freshness: dict[str, Any], market: dict[str, Any]) -> str:
+    regime = market.get("market_regime") or {}
+    snapshot = regime.get("market_snapshot") or {}
+    technical = stock.get("technical") or {}
+
+    def fmt(value: Any, digits: int = 2) -> str:
+        if value is None or value == "":
+            return "資料不足"
+        if isinstance(value, float):
+            return f"{value:.{digits}f}".rstrip("0").rstrip(".")
+        return str(value)
+
+    def pct(value: Any) -> str:
+        return "資料不足" if value is None or value == "" else f"{fmt(value)}%"
+
+    def signal(value: Any) -> str:
+        return {
+            "bullish": "偏多",
+            "bearish": "偏空",
+            "neutral": "中性",
+            "risk_on": "Risk-on / 風險偏好",
+            "risk_off": "Risk-off / 風險趨避",
+            "unknown": "未知",
+            None: "未知",
+        }.get(value, str(value))
+
+    price_type = "盤中價 / 延遲即時" if stock.get("is_realtime_price") else "最近收盤價"
+    if stock.get("is_delayed_price"):
+        price_type = "盤中延遲價"
+    source = stock.get("realtime_source") or stock.get("primary_price_source") or stock.get("exchange") or "Yahoo Finance / FinMind"
+    source_note = (
+        stock.get("price_delay_note")
+        if stock.get("is_realtime_price")
+        else "目前未取得盤中價，以下結論不能當作盤中追價依據。"
+    )
+
+    close = stock.get("close")
+    ma20 = stock.get("ma20")
+    if close is not None and ma20 is not None:
+        technical_position = "高於 20 日均線" if close >= ma20 else "低於 20 日均線"
+    else:
+        technical_position = "資料不足"
+
+    us_rows = []
+    us_bearish_count = 0
+    for key, label in (("sp500", "S&P 500"), ("nasdaq", "Nasdaq"), ("dow", "Dow")):
+        row = snapshot.get(key) or {}
+        if row:
+            change_1d = row.get("change_1d_pct")
+            if isinstance(change_1d, (int, float)) and change_1d < 0:
+                us_bearish_count += 1
+            us_rows.append(f"{label} {pct(change_1d)}（{fmt(row.get('date'))}）")
+    us_context = "；".join(us_rows) if us_rows else "美股三大指數資料不足"
+    us_read = "美股前一交易日偏弱，需降低追價意願。" if us_bearish_count >= 2 else "美股背景未形成明顯風險壓力。" if us_rows else "美股背景資料不足，不能忽略外部風險。"
+
+    if stock.get("is_realtime_price"):
+        price_read = f"目前讀到 {fmt(close)}，相對昨收 {pct(stock.get('change_pct'))}。"
+    else:
+        price_read = f"目前只讀到 {fmt(freshness.get('price_data_date'))} 收盤價 {fmt(close)}，不是盤中即時價格。"
+
+    return f"""## 盤中現況與外部背景
+
+| 項目 | 目前讀到的狀況 |
+|---|---|
+| 分析時間 | {fmt(freshness.get("analysis_time"))} |
+| 股價資料型態 | {price_type} |
+| 股價來源 | {source} |
+| 目前/最近價格 | {fmt(close)} |
+| 股價資料日期 | {fmt(freshness.get("price_data_date"))} |
+| 相對昨收漲跌 | {pct(stock.get("change_pct"))} |
+| 成交量 | {fmt(stock.get("volume"), 0)} |
+| 技術位置 | {technical_position}；RSI {fmt(technical.get("rsi14"))} |
+| 美股背景 | {us_context} |
+| 市場環境 | {signal(regime.get("market_regime"))}；美股 {signal(regime.get("us_market"))}；VIX {signal(regime.get("vix_signal"))} |
+
+**目前狀況判讀：**{price_read} {us_read}
+
+> {source_note}
+"""
+
+
+def _e_key_metrics_overview(
+    summary: dict[str, Any],
+    action_plan: dict[str, Any],
+    scores: dict[str, Any],
+    freight: dict[str, Any],
+    freight_intel: dict[str, Any],
+    risk_level: str,
+    timing_note: str,
+) -> str:
+    revised = scores.get("revised_score") or {}
+    freight_trend = _e_label(freight_intel.get("overall_trend"))
+    freight_strength = _e_label(freight_intel.get("strength"))
+    freight_confidence = freight_intel.get("confidence", 0)
+    scfi = freight.get("scfi_latest")
+    weekly_change = freight.get("weekly_change")
+    freight_line = f"{freight_trend} / {freight_strength}；SCFI {_e_num(scfi)}，週變化 {_e_pct(weekly_change)}，信心 {freight_confidence}"
+    return f"""## 關鍵指標總覽
+
+| 指標 | 本次結果 | 對操作的意義 |
+|---|---|---|
+| 今日結論 | **{_e_state(summary.get("market_state"))}** | 先看方向，再看時機與風險，不用單一分數追價。 |
+| 綜合分數 | {revised.get("overall_score", summary.get("conviction_score"))}/100 | 低於 65 時不應輸出積極偏多。 |
+| 時機分數 | {revised.get("timing_score", "資料不足")}/100 | {timing_note} |
+| 運價趨勢 | {freight_line} | 長榮短中線核心變數，優先級高於一般新聞。 |
+| 今日動作 | **{summary.get("action")}** | {action_plan.get("reason")} |
+| 下一個賣點 | {action_plan.get("next_sell_point")} | 接近壓力區要先檢查量價、法人與運價是否同步。 |
+| 下一個買回點 | {action_plan.get("next_buyback_point")} | 只有基本面與運價未轉弱時，回檔才有意義。 |
+| 主要風險 | {risk_level}；{summary.get("primary_risk")} | 風險分數低時，不給積極操作建議。 |
+"""
+
+
+def _e_source_timestamps(payload: dict[str, Any]) -> str:
+    lines = source_summary_lines(payload.get("sources") or [], limit=24)
+    if not lines:
+        lines = ["- 資料來源時間戳不足。"]
+    return "## 資料來源與時間戳\n\n" + "\n".join(lines)
+
+
 def _e_compose_report(
     self: AnalysisService,
     symbol: str,
@@ -4028,6 +4155,10 @@ def _e_compose_report(
     one_line = f"{symbol} 目前為{market_state}，資料覆蓋率 {summary.get('data_coverage')}%，可信度 {summary.get('truthfulness_score')}/100，綜合分數 {summary.get('conviction_score')}/100。{timing_note}"
 
     brief = f"""# 即時 AI 投資分析報告
+
+{_e_intraday_context(stock, freshness, market)}
+
+{_e_key_metrics_overview(summary, action_plan, scores, freight, freight_intel, risk_level, timing_note)}
 
 ## 決策摘要
 1. 今日結論：**{market_state}**
@@ -4096,6 +4227,8 @@ def _e_compose_report(
 {_e_data_quality_table(scores, truth, data_quality, gaps)}
 
 {_e_quality_examples(data_quality, truth)}
+
+{_e_source_timestamps(payload)}
 
 ## 資料來源
 {_e_sources(payload.get("sources") or [])}
@@ -4545,3 +4678,53 @@ def _clean_evidence_appendix(self: AnalysisService, payload: dict[str, Any]) -> 
 
 
 AnalysisService._compose_evidence_appendix = _clean_evidence_appendix
+
+
+_previous_evidence_appendix = AnalysisService._compose_evidence_appendix
+
+
+def _evidence_appendix_with_source_timestamps(self: AnalysisService, payload: dict[str, Any]) -> str:
+    appendix = _previous_evidence_appendix(self, payload)
+    lines = source_summary_lines(payload.get("sources") or [], limit=24)
+    if not lines:
+        lines = ["- 資料來源時間戳不足。"]
+    return (
+        appendix
+        + "\n\n---\n\n"
+        + "## 資料來源與時間戳\n\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+AnalysisService._compose_evidence_appendix = _evidence_appendix_with_source_timestamps
+
+
+_timestamped_evidence_appendix_base = _previous_evidence_appendix
+
+
+def _final_evidence_appendix_with_source_timestamps(self: AnalysisService, payload: dict[str, Any]) -> str:
+    appendix = _timestamped_evidence_appendix_base(self, payload)
+    title = "\u8cc7\u6599\u4f86\u6e90\u8207\u6642\u9593\u6233"
+    if title in appendix:
+        return appendix
+    lines = source_summary_lines(payload.get("sources") or [], limit=24)
+    if not lines:
+        lines = ["- \u8cc7\u6599\u4f86\u6e90\u6642\u9593\u6233\u4e0d\u8db3\u3002"]
+    return appendix + "\n\n---\n\n## " + title + "\n\n" + "\n".join(lines) + "\n"
+
+
+AnalysisService._compose_evidence_appendix = _final_evidence_appendix_with_source_timestamps
+
+
+def _ensure_source_timestamp_section(self: AnalysisService, report: str, payload: dict[str, Any]) -> str:
+    title = "\u8cc7\u6599\u4f86\u6e90\u8207\u6642\u9593\u6233"
+    if title in report:
+        return report
+    lines = source_summary_lines(payload.get("sources") or [], limit=24)
+    if not lines:
+        lines = ["- \u8cc7\u6599\u4f86\u6e90\u6642\u9593\u6233\u4e0d\u8db3\u3002"]
+    return report.rstrip() + "\n\n---\n\n## " + title + "\n\n" + "\n".join(lines) + "\n"
+
+
+AnalysisService._ensure_source_timestamp_section = _ensure_source_timestamp_section

@@ -42,25 +42,102 @@ def parse_symbols(symbol: str, symbols: str = "") -> list[str]:
     return parsed or ["2603.TW"]
 
 
-def _line_to_html(line: str) -> str:
-    escaped = html.escape(line)
-    if escaped.startswith("# "):
-        return f"<h1>{escaped[2:]}</h1>"
-    if escaped.startswith("## "):
-        return f"<h2>{escaped[3:]}</h2>"
-    if escaped.startswith("### "):
-        return f"<h3>{escaped[4:]}</h3>"
-    if escaped.startswith("- "):
-        return f"<li>{escaped[2:]}</li>"
-    if escaped.startswith(tuple(f"{i}. " for i in range(1, 10))):
-        return f"<p class=\"brief\">{escaped}</p>"
-    if not escaped.strip():
-        return "<br>"
-    return f"<p>{escaped}</p>"
+def _format_inline(text: str) -> str:
+    escaped = html.escape(text)
+    while "**" in escaped:
+        start = escaped.find("**")
+        end = escaped.find("**", start + 2)
+        if end == -1:
+            break
+        escaped = escaped[:start] + "<strong>" + escaped[start + 2 : end] + "</strong>" + escaped[end + 2 :]
+    return escaped
+
+
+def _is_table(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    header = lines[index].strip()
+    separator = lines[index + 1].strip()
+    return header.startswith("|") and separator.startswith("|") and "---" in separator
+
+
+def _split_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _table_to_html(lines: list[str], start: int) -> tuple[str, int]:
+    table_lines: list[str] = []
+    index = start
+    while index < len(lines) and lines[index].strip().startswith("|"):
+        table_lines.append(lines[index])
+        index += 1
+    headers = _split_table_row(table_lines[0])
+    body_rows = table_lines[2:]
+    thead = "<thead><tr>" + "".join(f"<th>{_format_inline(cell)}</th>" for cell in headers) + "</tr></thead>"
+    tbody = "<tbody>"
+    for row in body_rows:
+        cells = _split_table_row(row)
+        tbody += "<tr>" + "".join(f"<td>{_format_inline(cell)}</td>" for cell in cells) + "</tr>"
+    tbody += "</tbody>"
+    return f"<div class=\"table-wrap\"><table>{thead}{tbody}</table></div>", index
 
 
 def markdown_to_html(markdown: str, title: str) -> str:
-    body = "\n".join(_line_to_html(line) for line in markdown.splitlines())
+    lines = markdown.splitlines()
+    parts: list[str] = []
+    in_list = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if _is_table(lines, index):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            table_html, index = _table_to_html(lines, index)
+            parts.append(table_html)
+            continue
+        if line.startswith("# "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<h1>{_format_inline(line[2:])}</h1>")
+        elif line.startswith("## "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            title_text = line[3:]
+            cls = " key-section" if any(word in title_text for word in ["盤中現況", "關鍵指標", "決策摘要", "今日操作建議"]) else ""
+            parts.append(f"<h2 class=\"{cls.strip()}\">{_format_inline(title_text)}</h2>")
+        elif line.startswith("### "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<h3>{_format_inline(line[4:])}</h3>")
+        elif line.startswith("- ") or (len(stripped) > 2 and stripped[0].isdigit() and ". " in stripped[:4]):
+            if not in_list:
+                parts.append("<ul>")
+                in_list = True
+            item = stripped.split(". ", 1)[1] if stripped[0].isdigit() and ". " in stripped[:4] else stripped[2:]
+            parts.append(f"<li>{_format_inline(item)}</li>")
+        elif line.startswith("> "):
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<blockquote>{_format_inline(line[2:])}</blockquote>")
+        elif not stripped:
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+        else:
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            parts.append(f"<p>{_format_inline(line)}</p>")
+        index += 1
+    if in_list:
+        parts.append("</ul>")
+    body = "\n".join(parts)
     return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -68,15 +145,8 @@ def markdown_to_html(markdown: str, title: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html.escape(title)}</title>
   <style>
-    body {{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", Arial, sans-serif;
-      line-height: 1.65;
-      color: #10201c;
-      background: #fbfaf6;
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 32px 22px 56px;
-    }}
+    body {{ font-family: "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; line-height: 1.66; color: #17202a; background: #f5f7fa; margin: 0; }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 42px; }}
     h1 {{ font-size: 28px; margin: 0 0 18px; }}
     h2 {{
       font-size: 20px;
@@ -85,21 +155,24 @@ def markdown_to_html(markdown: str, title: str) -> str:
       border-left: 5px solid #087f6f;
       background: #eef8f4;
     }}
+    h2.key-section {{ background: #e8f7ef; border-left-color: #087f5b; }}
     h3 {{ font-size: 16px; margin: 20px 0 8px; color: #14584e; }}
     p, li {{ font-size: 15px; }}
     li {{ margin: 4px 0; }}
-    .brief {{
-      font-weight: 650;
-      background: #fff;
-      border: 1px solid #d6e6df;
-      border-radius: 6px;
-      padding: 8px 10px;
-      margin: 6px 0;
-    }}
+    strong {{ color: #0b5d57; }}
+    blockquote {{ margin: 12px 0; border-left: 5px solid #a16207; background: #fff6df; padding: 10px 12px; color: #594a35; }}
+    .table-wrap {{ overflow-x: auto; margin: 12px 0 18px; border: 1px solid #d9e2ec; background: #fff; }}
+    table {{ width: 100%; min-width: 680px; border-collapse: collapse; font-size: 14px; }}
+    th, td {{ border-bottom: 1px solid #d9e2ec; padding: 9px 10px; text-align: left; vertical-align: top; }}
+    th {{ color: #64748b; background: #fafbfc; font-weight: 800; }}
+    tr:last-child td {{ border-bottom: 0; }}
+    @media print {{ body {{ background: #fff; }} main {{ padding: 0; }} .table-wrap {{ break-inside: avoid; }} }}
   </style>
 </head>
 <body>
+<main>
 {body}
+</main>
 </body>
 </html>
 """

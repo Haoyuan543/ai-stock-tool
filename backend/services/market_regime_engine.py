@@ -9,6 +9,7 @@ from urllib.parse import quote
 import httpx
 
 from backend.search.web_search import web_search
+from backend.services.source_registry import now_taipei, source_stamp
 
 
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -24,11 +25,19 @@ PROBES = {
     "sp500": {"yahoo": "^GSPC", "stooq": "^spx", "name": "美股 S&P 500"},
 }
 
+PROBES.update(
+    {
+        "nasdaq": {"yahoo": "^IXIC", "stooq": "^ndq", "name": "Nasdaq Composite"},
+        "dow": {"yahoo": "^DJI", "stooq": "^dji", "name": "Dow Jones Industrial Average"},
+    }
+)
+
 
 def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
     markets: dict[str, Any] = {}
     sources: list[dict[str, Any]] = []
     missing_parts: list[str] = []
+    fetched_at = now_taipei()
 
     for key, config in PROBES.items():
         row = _fetch_yahoo_series(config["yahoo"], config["name"])
@@ -38,7 +47,18 @@ def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
                 missing_parts.append(f"{config['name']}使用 Stooq 備援，僅有最新價，趨勢信心較低")
         if row:
             markets[key] = row
-            sources.append({"name": f"{config['name']}（{row.get('source')}）", "url": row.get("url"), "as_of": row.get("date")})
+            sources.append(
+                source_stamp(
+                    f"{config['name']}｜{row.get('source')}",
+                    row.get("url") or "",
+                    data_as_of=row.get("date"),
+                    method=row.get("method") or "public_market_data",
+                    fetched_at=fetched_at,
+                    confidence=0.7 if row.get("source") == "Yahoo Finance" else 0.62,
+                    is_exact=False,
+                    note="市場環境輔助資料，非交易所正式授權即時行情。",
+                )
+            )
         else:
             missing_parts.append(f"{config['name']}未取得")
 
@@ -47,6 +67,8 @@ def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
             "台股 加權指數 航運股 VIX 美元 台幣 風險偏好 最新",
             "Taiwan stock market shipping sector VIX USD TWD risk sentiment latest",
             "US stocks VIX dollar Taiwan risk sentiment latest",
+            "美股 上週五 大跌 S&P 500 Nasdaq Dow 最新",
+            "Wall Street stocks fell Friday S&P 500 Nasdaq Dow latest",
         ],
         max_results_per_query=2,
     )
@@ -55,6 +77,9 @@ def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
     shipping = _shipping_signal(stock)
     taiwan = _index_signal(markets.get("taiwan_index"))
     sp500 = _index_signal(markets.get("sp500"))
+    nasdaq = _index_signal(markets.get("nasdaq"))
+    dow = _index_signal(markets.get("dow"))
+    us_market = _combine_market_signals([sp500, nasdaq, dow])
     vix_risk = _vix_signal(markets.get("vix"))
     dxy_risk = _fx_risk_signal(markets.get("dxy"))
     twd_risk = _fx_risk_signal(markets.get("usd_twd"))
@@ -62,7 +87,7 @@ def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
 
     positive = 0
     negative = 0
-    for item in (taiwan, sp500, shipping):
+    for item in (taiwan, us_market, shipping):
         positive += item == "bullish"
         negative += item == "bearish"
     for item in (vix_risk, dxy_risk, twd_risk):
@@ -80,7 +105,7 @@ def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
     else:
         regime = "unknown"
 
-    confidence = 0.12 + min(len(markets), 5) * 0.09
+    confidence = 0.12 + min(len(markets), 7) * 0.07
     if shipping != "neutral":
         confidence += 0.12
     if search_bias != "neutral":
@@ -100,7 +125,8 @@ def build_market_regime(stock: dict[str, Any]) -> dict[str, Any]:
         "market_regime": regime,
         "taiwan_market": taiwan,
         "shipping_sector": shipping,
-        "us_market": sp500,
+        "us_market": us_market,
+        "us_market_details": {"sp500": sp500, "nasdaq": nasdaq, "dow": dow},
         "vix_signal": vix_risk,
         "dxy_signal": dxy_risk,
         "usd_twd_signal": twd_risk,
@@ -155,6 +181,7 @@ def _fetch_yahoo_series(symbol: str, name: str) -> dict[str, Any] | None:
         "ma60": ma60,
         "source": "Yahoo Finance",
         "url": f"https://finance.yahoo.com/quote/{symbol}",
+        "method": "public_chart_api",
     }
 
 
@@ -188,6 +215,7 @@ def _fetch_stooq_quote(symbol: str, name: str) -> dict[str, Any] | None:
         "ma60": None,
         "source": "Stooq",
         "url": f"https://stooq.com/q/?s={symbol}",
+        "method": "public_csv",
     }
 
 
@@ -204,6 +232,20 @@ def _index_signal(row: dict[str, Any] | None) -> str:
         return "bearish"
     if change_5d <= -3:
         return "bearish"
+    return "neutral"
+
+
+def _combine_market_signals(signals: list[str]) -> str:
+    bullish = sum(item == "bullish" for item in signals)
+    bearish = sum(item == "bearish" for item in signals)
+    if bearish >= 2 and bearish > bullish:
+        return "bearish"
+    if bullish >= 2 and bullish > bearish:
+        return "bullish"
+    if bearish == 1 and bullish == 0:
+        return "bearish"
+    if bullish == 1 and bearish == 0:
+        return "bullish"
     return "neutral"
 
 

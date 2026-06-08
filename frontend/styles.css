@@ -73,6 +73,38 @@ button:disabled { opacity: .55; cursor: wait; }
 .markdown-output ul { padding-left: 22px; }
 .markdown-output li { margin: 5px 0; }
 .markdown-output strong { color: #0b5d57; font-weight: 900; }
+.markdown-output blockquote {
+  margin: 12px 0;
+  border-left: 5px solid var(--warn);
+  background: #fffaf2;
+  padding: 10px 12px;
+  color: #594a35;
+}
+.table-wrap {
+  overflow-x: auto;
+  margin: 12px 0 18px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.markdown-output table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.markdown-output th,
+.markdown-output td {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-output th {
+  background: #f7faf8;
+  color: var(--muted);
+  font-weight: 900;
+}
+.markdown-output tr:last-child td { border-bottom: 0; }
 .empty-state { color: var(--muted); }
 .summary-panel { margin: 18px 0; }
 .summary-output { padding: 16px; }

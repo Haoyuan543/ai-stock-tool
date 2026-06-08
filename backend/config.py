@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-5.5", alias="OPENAI_MODEL")
     finmind_token: str = Field(default="", alias="FINMIND_TOKEN")
     news_api_key: str = Field(default="", alias="NEWS_API_KEY")
+    eia_api_key: str = Field(default="", alias="EIA_API_KEY")
     serpapi_api_key: str = Field(default="", alias="SERPAPI_API_KEY")
     tavily_api_key: str = Field(default="", alias="TAVILY_API_KEY")
     brave_search_api_key: str = Field(default="", alias="BRAVE_SEARCH_API_KEY")
