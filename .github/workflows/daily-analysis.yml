@@ -65,6 +65,43 @@ jobs:
           echo "utc_time=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "taipei_time=$(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M:%S Asia/Taipei')"
 
+      - name: Check cloud freight database read
+        env:
+          UPDATE_SUPABASE: ${{ secrets.UPDATE_SUPABASE || 'true' }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          READ_SUPABASE_FREIGHT: ${{ secrets.READ_SUPABASE_FREIGHT || 'true' }}
+        run: |
+          python - <<'PY'
+          import json
+          from backend.integrations.supabase_client import diagnostic_status
+          from backend.services.freight_route_store import latest_route_row_from_supabase
+
+          status = diagnostic_status()
+          row = latest_route_row_from_supabase()
+          print("cloud_supabase_configured=" + str(status.get("configured")))
+          print("cloud_supabase_host=" + str(status.get("host")))
+          print("cloud_supabase_host_looks_valid=" + str(status.get("host_looks_valid")))
+          print("cloud_freight_routes_latest_found=" + str(bool(row)))
+          if row:
+              safe_row = {
+                  "date": row.get("date"),
+                  "scfi": row.get("scfi"),
+                  "weekly_change": row.get("weekly_change"),
+                  "scfi_streak_weeks": row.get("scfi_streak_weeks"),
+                  "us_west": row.get("us_west"),
+                  "us_west_weekly_change": row.get("us_west_weekly_change"),
+                  "us_east": row.get("us_east"),
+                  "us_east_weekly_change": row.get("us_east_weekly_change"),
+                  "europe": row.get("europe"),
+                  "europe_weekly_change": row.get("europe_weekly_change"),
+                  "source": row.get("source"),
+                  "quality": row.get("quality"),
+                  "storage_source": row.get("_storage_source"),
+              }
+              print("cloud_freight_routes_latest=" + json.dumps(safe_row, ensure_ascii=False))
+          PY
+
       - name: Run scheduled analysis
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -94,6 +131,9 @@ jobs:
           SUPABASE_REQUIRED: ${{ secrets.SUPABASE_REQUIRED || 'false' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          READ_SUPABASE_FREIGHT: ${{ secrets.READ_SUPABASE_FREIGHT || 'true' }}
+          SCFI_AUTO_UPDATE_CLOUD: ${{ secrets.SCFI_AUTO_UPDATE_CLOUD || 'true' }}
+          SCFI_AUTO_UPDATE_LOCAL_CSV: ${{ secrets.SCFI_AUTO_UPDATE_LOCAL_CSV || 'false' }}
           VALIDATE_PREDICTIONS: ${{ secrets.VALIDATE_PREDICTIONS || 'true' }}
           RUN_REPORT_AUDIT: ${{ secrets.RUN_REPORT_AUDIT || 'true' }}
           REPORT_SYMBOL: ${{ github.event.inputs.symbol || '2603.TW' }}

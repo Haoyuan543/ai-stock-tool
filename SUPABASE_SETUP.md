@@ -1,237 +1,89 @@
-# Supabase 長期資料庫設定
+# Supabase 設定手冊
 
-## 新版航運快取表
+Supabase 是這個工具的雲端資料庫，用來保存 GitHub Actions 每次分析產生的資料。GitHub runner 是臨時機器，執行完就會消失，所以長期資料不能只放在 runner 裡的檔案。
 
-如果你已經建立過資料表，這次仍建議到 Supabase 的 SQL Editor 重新執行一次 `database/schema.sql`。
+## 主要用途
 
-新版 schema 會新增：
+- 保存每次分析紀錄。
+- 保存市場快照。
+- 保存 7 / 30 / 90 天預測驗證結果。
+- 保存航線運價資料 `freight_routes`，讓雲端分析不用只靠 Repo 內建 CSV。
 
-```text
-freight_cache
-```
+## 必要資料表
 
-用途是保存「上次成功抓到的 SCFI / 美西 / 美東 / 歐洲線資料」。每日 GitHub Actions 會優先抓最新公開資料；如果公開頁、搜尋或 OCR 當天失敗，才會用這張表補缺口。報告會明確標示快取日期與補齊欄位，不會把快取當成今日即時數字。
-
-需要的 GitHub Secrets 仍是：
-
-```text
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
-UPDATE_SUPABASE=true
-SUPABASE_REQUIRED=false
-```
-
-此功能會把每次 GitHub Actions 分析結果保存到 Supabase PostgreSQL，供未來做回測、勝率統計、7 / 30 / 90 天驗證。
-
-## 1. 建立 Supabase Project
-
-1. 到 [Supabase](https://supabase.com/)
-2. 建立新 project
-3. 進入：
-
-```text
-Project Settings -> API
-```
-
-取得：
-
-```text
-Project URL
-service_role key
-```
-
-注意：`service_role key` 權限很高，只能放 GitHub Secrets，不要 commit 到 repo。
-
-## 2. 建立資料表
-
-到 Supabase：
-
-```text
-SQL Editor -> New query
-```
-
-貼上：
+請到 Supabase SQL Editor 執行：
 
 ```text
 database/schema.sql
 ```
 
-執行後會建立：
+這會建立或更新：
+
+- `analysis_runs`
+- `market_snapshots`
+- `prediction_validations`
+- `freight_cache`
+- `freight_routes`
+
+## GitHub Secrets
+
+到 GitHub Repo：
 
 ```text
-analysis_runs
-market_snapshots
-prediction_validations
+Settings -> Secrets and variables -> Actions -> New repository secret
 ```
 
-如果你之前已經建立過 `analysis_runs`，請仍然重新執行一次 `database/schema.sql`。  
-它包含：
-
-```sql
-alter table analysis_runs add column if not exists audit_json jsonb;
-```
-
-所以可以安全補上自我審查欄位。
-
-## 3. 設定 GitHub Secrets
-
-到：
+至少設定：
 
 ```text
-GitHub repo -> Settings -> Secrets and variables -> Actions
-```
-
-新增：
-
-```text
-SUPABASE_URL
-SUPABASE_SERVICE_ROLE_KEY
-UPDATE_SUPABASE
-SUPABASE_REQUIRED
-```
-
-建議：
-
-```text
+SUPABASE_URL=你的 Supabase Project URL
+SUPABASE_SERVICE_ROLE_KEY=你的 service_role secret key
 UPDATE_SUPABASE=true
 SUPABASE_REQUIRED=false
+READ_SUPABASE_FREIGHT=true
+SCFI_AUTO_UPDATE_CLOUD=true
+SCFI_AUTO_UPDATE_LOCAL_CSV=false
 ```
 
-`SUPABASE_REQUIRED=false` 的意思是：資料庫暫時寫入失敗時，Email 和 Google Sheet 仍會正常執行。
+## 航線資料雲端化
 
-## 4. 寫入內容
+`data/scfi_routes.csv` 只是 Repo 內建備援檔，不是雲端即時資料庫。
 
-`analysis_runs` 會保存：
+雲端執行時的正確順序：
 
-```text
-分析時間
-股票代號
-模式
-股價
-資料日期
-市場狀態
-操作建議
-Direction / Timing / Valuation / Risk / Coverage / Truthfulness / Overall Score
-完整 market_data_json
-完整 report_markdown
-資料品質
-可信度
-warnings
-```
+1. 先讀 Supabase `freight_routes` 最新資料。
+2. 若 Supabase 沒資料，才讀 Repo 內建 `data/scfi_routes.csv`。
+3. 若公開資料或新聞抽取取得完整 SCFI、美西、美東、歐洲線數字，寫回 Supabase。
+4. 報告會標示來源是「Supabase 雲端航線資料庫」或「Repo 內建 CSV 航線備援」。
 
-`market_snapshots` 會保存：
+## 關於即時性
 
-```text
-股價
-成交量
-20MA
-60MA
-SCFI
-運價趨勢
-法人合計
-EPS
-股利殖利率
-原始 market_data JSON
-```
+SCFI 與主要航線運價通常是週資料，不是盤中逐筆跳動報價。這個工具的「即時」意思是：
 
-`prediction_validations` 會保存：
+- 使用者按下分析或排程觸發時，重新抓當下可取得的最新公開資料。
+- 若抓到新的完整航線資料，更新到 Supabase。
+- 報告標示資料日期與本次抓取時間。
 
-```text
-prediction_id
-symbol
-horizon: 7d / 30d / 90d
-base_price
-future_price
-actual_return
-max_drawdown
-correct
-validated_at
-details_json
-```
+因此它可以做到雲端自動更新與雲端保存，但不能把週資料變成盤中報價。
 
-## 4.1 每日自動驗證
+## 如何確認成功
 
-GitHub Actions 每次跑完分析後，會自動執行：
-
-```text
-validate_due_predictions()
-```
-
-它會：
-
-1. 從 `analysis_runs` 讀取歷史分析。
-2. 找出已滿 7 / 30 / 90 天的紀錄。
-3. 抓目前股價歷史。
-4. 計算實際報酬、最大回撤、方向是否判斷正確。
-5. 寫入 `prediction_validations`。
-
-需要 GitHub Secret：
-
-```text
-VALIDATE_PREDICTIONS=true
-```
-
-如果要暫停驗證：
-
-```text
-VALIDATE_PREDICTIONS=false
-```
-
-## 4.2 自我審查保存
-
-每次報告寄出前會先跑 Report Audit，檢查：
-
-```text
-強結論與分數是否矛盾
-低時機分數是否仍建議追價
-低風險分數是否仍建議積極操作
-資料可信度不足是否有揭露
-股價非即時是否有提醒
-是否出現工程字眼
-是否缺少核心報告區塊
-```
-
-結果會寫入 `analysis_runs.audit_json`。
-
-需要 GitHub Secret：
-
-```text
-RUN_REPORT_AUDIT=true
-```
-
-如果要暫停：
-
-```text
-RUN_REPORT_AUDIT=false
-```
-
-## 5. 本機測試
-
-`.env` 加上：
-
-```env
-UPDATE_SUPABASE=true
-SUPABASE_REQUIRED=false
-SUPABASE_URL=你的 Supabase project URL
-SUPABASE_SERVICE_ROLE_KEY=你的 service_role key
-```
-
-執行：
-
-```powershell
-$env:SEND_EMAIL="false"
-.\.venv\Scripts\python.exe -m backend.jobs.daily_analysis_email --symbol 2603.TW --mode personalized --model gpt-5
-```
-
-成功時 log 會出現：
+GitHub Actions log 應出現：
 
 ```text
 Supabase history written.
 ```
 
-## 6. 注意事項
+如果有新的完整航線資料，報告或 log 會顯示航線資料已寫入 Supabase `freight_routes`。
 
-- `service_role key` 不可公開。
-- 如果 table 尚未建立，會回傳 404 或 relation not found。
-- 如果 Row Level Security 擋住寫入，請確認你使用的是 service_role key。
-- GitHub runner 是臨時機器，長期歷史要靠 Supabase 保存，不要靠 runner 裡的 `data/*.jsonl`。
+Supabase Table Editor 可檢查：
+
+- `analysis_runs` 是否新增一筆分析紀錄。
+- `market_snapshots` 是否新增市場快照。
+- `freight_routes` 是否有最新航線資料。
+
+## 常見問題
+
+- 如果 `analysis_runs` 有資料但 `freight_routes` 沒更新，通常代表本次公開資料沒有取得完整 SCFI、美西、美東、歐洲線數字。
+- 如果報告顯示「Repo 內建 CSV 航線備援」，代表 Supabase 沒有可用資料或 GitHub Secrets 沒有設定完整。
+- 如果 Supabase 寫入失敗，請檢查 `SUPABASE_URL` 是否為 Project URL，`SUPABASE_SERVICE_ROLE_KEY` 是否是 Secret key，不是 publishable key。

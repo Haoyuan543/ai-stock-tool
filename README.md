@@ -214,13 +214,16 @@ For Supabase history, rerun `database/schema.sql` after pulling this version. It
 
 ## Supabase Freight Routes
 
-GitHub Actions can also read the latest SCFI route data from Supabase, so cloud runs do not depend only on the CSV committed in the repository.
+GitHub Actions uses Supabase as the cloud freight route database. `data/scfi_routes.csv` is only a repository seed and local fallback, not the primary cloud source.
 
 - Run `database/schema.sql` in Supabase SQL Editor after pulling this version. It adds the `freight_routes` table.
-- Keep `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `UPDATE_SUPABASE=true` in GitHub Actions secrets.
-- `READ_SUPABASE_FREIGHT=true` is enabled by default. When set, the freight fetcher reads the newest row from `freight_routes` before falling back to `data/scfi_routes.csv`.
-- When public search extraction finds a newer complete set of SCFI, US West, US East, and Europe route numbers, the tool writes that row to both local CSV and Supabase.
-- The report labels whether route values came from official pages, Supabase, CSV, or search-inferred context.
+- Keep `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `UPDATE_SUPABASE=true`, `READ_SUPABASE_FREIGHT=true`, and `SCFI_AUTO_UPDATE_CLOUD=true` in GitHub Actions secrets.
+- `READ_SUPABASE_FREIGHT=true` makes the freight fetcher read the newest row from Supabase `freight_routes` first.
+- `SCFI_AUTO_UPDATE_CLOUD=true` makes newly extracted complete SCFI route data write back to Supabase during cloud runs.
+- `SCFI_AUTO_UPDATE_LOCAL_CSV=false` is the recommended cloud setting. The CSV should not be treated as live cloud storage because GitHub Actions file changes disappear after the run unless committed.
+- If Supabase is unavailable, the tool can still fall back to `data/scfi_routes.csv`, but the report labels it as `Repo 內建 CSV 航線備援`.
+- SCFI and route freight rates are weekly public data, not tick-level intraday quotes. "Realtime" here means the tool fetches the latest public data when the analysis starts, then stores confirmed complete route data in Supabase.
+- The report labels whether route values came from official pages, Supabase, CSV, or search-inferred context, with data dates and fetch timestamps where available.
 
 ## Data Quality Classification
 

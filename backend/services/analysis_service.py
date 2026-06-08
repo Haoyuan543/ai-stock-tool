@@ -3925,7 +3925,7 @@ def _e_data_quality_table(scores: dict[str, Any], truth: dict[str, Any], data_qu
 
 
 def _e_freight_cache_lines(freight: dict[str, Any]) -> str:
-    csv_note = f"\n- CSV 自動更新：{freight.get('csv_update_note')}" if freight.get("csv_update_note") else ""
+    csv_note = f"\n- 航線資料雲端更新狀態：{freight.get('csv_update_note')}" if freight.get("csv_update_note") else ""
     if not freight.get("cache_used"):
         return "- 快取補齊：否，本次報告以本次抓取與推論資料為主。" + csv_note
     fields = freight.get("cache_filled_fields") or []

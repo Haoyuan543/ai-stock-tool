@@ -78,11 +78,11 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None, allow_
             data["supabase_route_used"] = True
             data["supabase_route_date"] = latest.get("date")
             data["route_storage_source"] = "supabase"
-            data["route_storage_label"] = "Supabase 雲端航線資料庫"
+            data["route_storage_label"] = "Supabase \u96f2\u7aef\u822a\u7dda\u8cc7\u6599\u5eab"
         else:
             sources.append(csv_source)
             data["route_storage_source"] = "repo_csv"
-            data["route_storage_label"] = "Repo 內建 CSV 航線資料"
+            data["route_storage_label"] = "Repo \u5167\u5efa CSV \u822a\u7dda\u5099\u63f4"
         csv_data = _row_to_data(latest)
         csv_row_date = csv_data.get("latest_date")
         if data.get("latest_date") and csv_data.get("latest_date"):
@@ -232,7 +232,7 @@ def _sync_route_row_to_supabase_if_current(row: dict[str, Any], data: dict[str, 
     if result.get("written"):
         data["supabase_route_synced"] = True
         data["supabase_route_date"] = row_date
-        sync_note = f"已將有效期限內的航線資料同步到 Supabase freight_routes，資料日期 {row_date}。"
+        sync_note = f"\u5df2\u5c07\u6709\u6548\u671f\u5167\u7684\u822a\u7dda\u8cc7\u6599\u540c\u6b65\u5230 Supabase freight_routes\uff0c\u8cc7\u6599\u65e5\u671f {row_date}\u3002"
         data["csv_update_note"] = f"{data.get('csv_update_note')} {sync_note}".strip() if data.get("csv_update_note") else sync_note
 
 
@@ -340,7 +340,7 @@ def _apply_csv_freshness_guard(data: dict[str, Any], missing: list[str]) -> None
     })
     if not data["csv_stale"]:
         return
-    stale_date = csv_date or "日期不明"
+    stale_date = csv_date or "unknown date"
     _clear_csv_exact_fields(data, fields=list(csv_filled_fields), keep_official_scfi=bool(official_latest_date))
     data["csv_exact_used"] = False
     data["note"] = (
@@ -348,7 +348,7 @@ def _apply_csv_freshness_guard(data: dict[str, Any], missing: list[str]) -> None
         + f" CSV route data date {stale_date} is stale or invalid, so it was not used as exact current freight data."
     )
     missing.append(
-        f"Data Limitation: data/scfi_routes.csv 日期 {stale_date} 已超過可用期限或無法判讀，未列為本次精確航線資料。"
+        f"Data Limitation: data/scfi_routes.csv date {stale_date} is stale or invalid, so it was not used as exact current route data."
     )
 
 
@@ -375,13 +375,13 @@ def _downgrade_weak_search_route_exactness(data: dict[str, Any], missing: list[s
             "route": route,
             "value": value,
             "reason": source_note,
-            "message": "搜尋 fallback 只取得單一航線數字，可信度不足；已降級為趨勢推論，不列為精確航線資料。",
+            "message": "Search fallback found only one route value, so it is kept as route context instead of exact complete route coverage.",
         }
     )
     data[route] = None
     data[f"{route}_weekly_change"] = None
     missing.append(
-        "Data Limitation: 搜尋 fallback 只取得單一航線數字，已降級為趨勢推論；需三大航線交叉確認或快取補齊。"
+        "Data Limitation: search fallback found only one route value, so exact route coverage still requires confirmation."
     )
 
 
@@ -390,36 +390,8 @@ def _maybe_update_scfi_csv_from_search(
     current_data: dict[str, Any],
     latest_csv_row: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if not extracted:
-        return {"updated": False, "note": ""}
-    if _env("SCFI_AUTO_UPDATE_CSV", "true").lower() not in {"1", "true", "yes", "on"}:
-        return {"updated": False, "note": "SCFI CSV auto-update disabled by SCFI_AUTO_UPDATE_CSV."}
-
-    row = _csv_row_from_search_extraction(extracted)
-    if not row:
-        return {"updated": False, "note": "搜尋資料未取得三條主要航線完整數字，不更新 CSV。"}
-
-    search_date = row.get("date")
-    csv_date = (latest_csv_row or {}).get("date") or current_data.get("csv_row_date")
-    if not search_date:
-        return {"updated": False, "note": "搜尋資料沒有可驗證資料日期，不更新 CSV。"}
-    if csv_date and not (_date_after(search_date, csv_date) or _same_date(search_date, csv_date)):
-        return {"updated": False, "note": f"搜尋資料日期 {search_date} 未比 CSV 日期 {csv_date} 新，不更新 CSV。"}
-    if _same_date(search_date, csv_date) and latest_csv_row and not _csv_row_materially_changed(row, latest_csv_row):
-        return {"updated": False, "note": f"搜尋資料日期 {search_date} 與 CSV 相同且數值一致，沿用 CSV。"}
-
-    if not _write_scfi_csv_row(row):
-        return {"updated": False, "note": "搜尋資料符合更新條件，但寫入 data/scfi_routes.csv 失敗。"}
-
-    source = row.get("source") or "auto_updated_from_public_news"
-    action = "覆寫" if _same_date(search_date, csv_date) else "新增"
-    return {
-        "updated": True,
-        "date": search_date,
-        "source": source,
-        "note": f"{action} data/scfi_routes.csv：使用公開新聞/搜尋抽取的較新航線資料，資料日 {search_date}。",
-    }
-
+    """Compatibility shim; the cloud-first implementation is defined later in this module."""
+    return {"updated": False, "note": "SCFI route auto-update is handled by the cloud-first implementation."}
 
 def _csv_row_from_search_extraction(extracted: dict[str, Any]) -> dict[str, str] | None:
     route_rates = extracted.get("route_rates") or {}
@@ -479,8 +451,8 @@ def _extracted_data_date(extracted: dict[str, Any]) -> str:
 
 def _dates_from_text(text: str) -> list[date]:
     out: list[date] = []
-    for match in re.findall(r"20\d{2}[-/年.]\d{1,2}[-/月.]\d{1,2}", text or ""):
-        normalized = re.sub(r"[年月/.]", "-", match).rstrip("-")
+    for match in re.findall(r"20\d{2}[-/\u5e74.]\d{1,2}[-/\u6708.]\d{1,2}\u65e5?", text or ""):
+        normalized = re.sub(r"[\u5e74\u6708\u65e5/.]", "-", match).rstrip("-")
         parsed = _parse_date(normalized)
         if parsed:
             out.append(parsed)
@@ -605,26 +577,30 @@ def _parse_sse_single_index_html(text: str) -> dict[str, Any]:
         "latest_date": None,
     }
     for cells in rows:
-        joined = " ".join(cells)
+        joined = " ".join(str(cell) for cell in cells)
+        lowered = joined.lower()
         if not cells:
             continue
-        if "航线" in joined and "本期" in joined:
-            dates = re.findall(r"\d{4}-\d{2}-\d{2}", joined)
-            if dates:
-                data["latest_date"] = dates[-1]
-            continue
-        if "综合指数" in joined or "Comprehensive Index" in joined:
+        dates = re.findall(r"\d{4}-\d{2}-\d{2}", joined)
+        if dates:
+            data["latest_date"] = dates[-1]
+        if (
+            "comprehensive index" in lowered
+            or "scfi comprehensive" in lowered
+            or "\u7d9c\u5408\u6307\u6578" in joined
+            or "\u7efc\u5408\u6307\u6570" in joined
+        ):
             prev, current, _delta = _last_three_numbers(cells)
             data["scfi_latest"] = current
             if prev is not None and current is not None and prev:
                 data["weekly_change"] = round((current - prev) / prev * 100, 2)
             continue
         route = None
-        if "美西" in joined or "USWC" in joined:
+        if any(token in lowered for token in ["uswc", "u.s. west", "us west", "america west"]):
             route = "us_west"
-        elif "美东" in joined or "USEC" in joined:
+        elif any(token in lowered for token in ["usec", "u.s. east", "us east", "america east"]):
             route = "us_east"
-        elif "欧洲" in joined or "Europe" in joined:
+        elif "europe" in lowered or "\u6b50\u6d32" in joined or "\u6b27\u6d32" in joined:
             route = "europe"
         if route:
             prev, current, _delta = _last_three_numbers(cells)
@@ -633,7 +609,6 @@ def _parse_sse_single_index_html(text: str) -> dict[str, Any]:
             if prev is not None and current is not None and prev:
                 data[f"{route}_weekly_change"] = round((current - prev) / prev * 100, 2)
     return data
-
 
 def _html_table_rows(text: str) -> list[list[str]]:
     rows: list[list[str]] = []
@@ -760,9 +735,9 @@ def _materially_different(left: float, right: float, tolerance_pct: float) -> bo
 
 def _remove_route_evidence(cleaned: dict[str, Any], route: str) -> None:
     labels = {
-        "us_west": ("US West", "美西"),
-        "us_east": ("US East", "美東"),
-        "europe": ("Europe", "歐洲"),
+        "us_west": ("US West", "\u7f8e\u897f"),
+        "us_east": ("US East", "\u7f8e\u6771"),
+        "europe": ("Europe", "\u6b50\u6d32", "\u6b27\u6d32"),
     }.get(route, (route,))
     evidence = cleaned.setdefault("evidence_type", {})
     evidence["exact_data"] = [
@@ -816,7 +791,12 @@ def _extract_scfi_numbers_from_text(text: str, rows: list[dict[str, Any]]) -> di
     if not text:
         return {}
     normalized = _normalize_number_text(text)
-    if not any(token.lower() in normalized.lower() for token in ("scfi", "美西", "美東", "欧洲", "歐洲", "us west", "us east")):
+    lower = normalized.lower()
+    tokens = (
+        "scfi", "freight", "container", "us west", "us east", "west coast", "east coast", "europe",
+        "\u904b\u50f9", "\u822a\u7dda", "\u7f8e\u897f", "\u7f8e\u6771", "\u6b50\u6d32", "\u6b27\u6d32", "\u96c6\u88dd\u7bb1", "\u96c6\u88c5\u7bb1",
+    )
+    if not any(token in lower or token in normalized for token in tokens):
         return {}
 
     scfi_latest = _scfi_latest_value(normalized)
@@ -824,8 +804,9 @@ def _extract_scfi_numbers_from_text(text: str, rows: list[dict[str, Any]]) -> di
     weeks = _first_number(
         normalized,
         [
-            r"連續(?:第)?\s*([0-9]+)\s*週(?:上漲|走揚|漲)",
-            r"連\s*([0-9]+)\s*漲",
+            r"(?:consecutive|straight)\s*([0-9]+)\s*weeks?",
+            r"\u9023\u7e8c\s*([0-9]+)\s*\u9031",
+            r"\u8fde\u7eed\s*([0-9]+)\s*\u5468",
         ],
         min_value=1,
         max_value=20,
@@ -833,12 +814,17 @@ def _extract_scfi_numbers_from_text(text: str, rows: list[dict[str, Any]]) -> di
     if weeks is None:
         weeks = _chinese_streak_weeks(normalized)
 
-    us_west = _route_rate(normalized, ("美西", "US West", "U.S. West", "West Coast"))
-    us_east = _route_rate(normalized, ("美東", "美东", "US East", "U.S. East", "East Coast"))
-    europe = _route_rate(normalized, ("歐洲", "欧洲", "Europe", "North Europe"))
-    us_west_change = _route_change(normalized, ("美西", "US West", "U.S. West", "West Coast"))
-    us_east_change = _route_change(normalized, ("美東", "美东", "US East", "U.S. East", "East Coast"))
-    europe_change = _route_change(normalized, ("歐洲", "欧洲", "Europe", "North Europe"))
+    route_labels = {
+        "us_west": ("US West", "U.S. West", "West Coast", "America West", "\u7f8e\u897f", "\u7f8e\u897f\u7dda"),
+        "us_east": ("US East", "U.S. East", "East Coast", "America East", "\u7f8e\u6771", "\u7f8e\u6771\u7dda"),
+        "europe": ("Europe", "North Europe", "\u6b50\u6d32", "\u6b27\u6d32", "\u6b50\u6d32\u7dda", "\u6b27\u6d32\u7ebf"),
+    }
+    us_west = _route_rate(normalized, route_labels["us_west"])
+    us_east = _route_rate(normalized, route_labels["us_east"])
+    europe = _route_rate(normalized, route_labels["europe"])
+    us_west_change = _route_change(normalized, route_labels["us_west"])
+    us_east_change = _route_change(normalized, route_labels["us_east"])
+    europe_change = _route_change(normalized, route_labels["europe"])
 
     exact_notes = []
     if scfi_latest is not None:
@@ -846,7 +832,12 @@ def _extract_scfi_numbers_from_text(text: str, rows: list[dict[str, Any]]) -> di
     for label, value in (("US West", us_west), ("US East", us_east), ("Europe", europe)):
         if value is not None:
             exact_notes.append(f"{label} route rate {value}")
-    for label, value in (("SCFI weekly change", weekly_change), ("US West weekly change", us_west_change), ("US East weekly change", us_east_change), ("Europe weekly change", europe_change)):
+    for label, value in (
+        ("SCFI weekly change", weekly_change),
+        ("US West weekly change", us_west_change),
+        ("US East weekly change", us_east_change),
+        ("Europe weekly change", europe_change),
+    ):
         if value is not None:
             exact_notes.append(f"{label} {value}%")
     if not exact_notes:
@@ -886,22 +877,12 @@ def _infer_freight_data_date(text: str, rows: list[dict[str, Any]]) -> str:
 
 
 def _normalize_number_text(text: str) -> str:
-    full_width = str.maketrans({
-        "０": "0",
-        "１": "1",
-        "２": "2",
-        "３": "3",
-        "４": "4",
-        "５": "5",
-        "６": "6",
-        "７": "7",
-        "８": "8",
-        "９": "9",
-        "．": ".",
-        "％": "%",
-        "，": ",",
+    table = str.maketrans({
+        "\uff10": "0", "\uff11": "1", "\uff12": "2", "\uff13": "3", "\uff14": "4",
+        "\uff15": "5", "\uff16": "6", "\uff17": "7", "\uff18": "8", "\uff19": "9",
+        "\uff0e": ".", "\uff05": "%", "\uff0c": ",", "\u3000": " ",
     })
-    return text.translate(full_width).replace(",", "")
+    return text.translate(table).replace(",", "")
 
 
 def _first_number(text: str, patterns: list[str], min_value: float, max_value: float) -> float | None:
@@ -915,105 +896,63 @@ def _first_number(text: str, patterns: list[str], min_value: float, max_value: f
 
 def _scfi_latest_value(text: str) -> float | None:
     candidates: list[float] = []
-    sentences = re.split(r"[。\n；;]", text)
-    for sentence in sentences:
-        upper = sentence.upper()
-        if "SCFI" not in upper and "上海集裝箱" not in sentence and "上海集装箱" not in sentence and "運價指數" not in sentence and "运价指数" not in sentence:
-            continue
-        if "http" in sentence.lower() or "/story/" in sentence.lower():
-            continue
-        for match in re.finditer(r"([0-9]{4}(?:\.[0-9]+)?)\s*(?:點|点)", sentence):
+    patterns = [
+        r"SCFI[\s\S]{0,120}?([0-9]{4}(?:\.[0-9]+)?)",
+        r"(?:\u7d9c\u5408\u6307\u6578|\u7efc\u5408\u6307\u6570)[\s\S]{0,80}?([0-9]{4}(?:\.[0-9]+)?)",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.I):
             value = _safe_float(match.group(1))
-            if value is not None and 1000 <= value <= 6000:
+            if value is not None and 1000 <= value <= 8000:
                 candidates.append(value)
-        for match in re.finditer(r"(?:至|為|为|報|报|來到|来到)\s*([0-9]{4}(?:\.[0-9]+)?)", sentence):
-            window = sentence[max(0, match.start() - 40) : match.end() + 20]
-            if "美元" in window or "USD" in window.upper():
-                continue
-            value = _safe_float(match.group(1))
-            if value is not None and 1000 <= value <= 6000:
-                candidates.append(value)
-    if candidates:
-        return max(candidates)
-    return _first_number(
-        text,
-        [
-            r"(?:SCFI|上海出口集裝箱運價指數|上海出口集装箱运价指数)[^。\n；;]{0,120}([0-9]{4}(?:\.[0-9]+)?)",
-        ],
-        min_value=1000,
-        max_value=6000,
-    )
+    return candidates[0] if candidates else None
 
 
 def _scfi_weekly_change(text: str) -> float | None:
-    sentences = re.split(r"[。\n；;]", text)
-    for sentence in sentences:
-        if "SCFI" not in sentence.upper() and "指數" not in sentence and "指数" not in sentence:
-            continue
-        value = _first_number(
-            sentence,
-            [
-                r"(?:約|漲幅|週漲|周漲|上漲)?[^0-9+\-]{0,8}([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%",
-            ],
-            min_value=-50,
-            max_value=80,
-        )
-        if value is not None:
-            return value
-    return _first_number(
-        text,
-        [r"(?:SCFI|指數|指数)[^。\n；;]{0,80}(?:週漲|周漲|上漲|漲幅)[^0-9+\-]{0,8}([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%"],
-        min_value=-50,
-        max_value=80,
-    )
+    patterns = [
+        r"SCFI[\s\S]{0,120}?(?:weekly|week|WoW|\u9031|\u5468|\u6f32|\u6da8|\u8dcc|change)[^0-9+\-]{0,20}([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%",
+        r"(?:\u7d9c\u5408\u6307\u6578|\u7efc\u5408\u6307\u6570)[\s\S]{0,120}?([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%",
+    ]
+    return _first_number(text, patterns, -50, 80)
 
 
 def _route_rate(text: str, labels: tuple[str, ...]) -> float | None:
     for label in labels:
         patterns = [
-            rf"{re.escape(label)}[^。\n]{{0,60}}?(?:運價|線|航線|報價)?[^0-9]{{0,12}}([0-9]{{3,5}}(?:\.[0-9]+)?)\s*(?:美元|USD|美金)?",
-            rf"(?:遠東|上海|亞洲)[^。\n]{{0,20}}{re.escape(label)}[^。\n]{{0,80}}?([0-9]{{3,5}}(?:\.[0-9]+)?)",
+            rf"{re.escape(label)}[\s\S]{{0,120}}?([0-9]{{3,5}}(?:\.[0-9]+)?)\s*(?:USD|usd|\u7f8e\u5143|\u9ede|\u70b9)?",
         ]
-        value = _first_number(text, patterns, 500, 12000)
-        if value is not None:
-            return value
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.I):
+                window = text[max(0, match.start() - 30): match.end() + 30]
+                if "%" in window[match.start() - max(0, match.start() - 30):]:
+                    continue
+                value = _safe_float(match.group(1))
+                if value is not None and 500 <= value <= 15000:
+                    return value
     return None
 
 
 def _route_change(text: str, labels: tuple[str, ...]) -> float | None:
     candidates: list[tuple[int, float]] = []
     for label in labels:
-        patterns = [
-            rf"{re.escape(label)}[^。\n]{{0,80}}?(?:週漲|周漲|上漲|漲幅)[^0-9+\-]{{0,8}}([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%",
-            rf"{re.escape(label)}[^。\n]{{0,80}}?([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%",
-        ]
-        for pattern in patterns:
-            for match in re.finditer(pattern, text, flags=re.I):
-                value = _safe_float(match.group(1))
-                if value is None or not -50 <= value <= 80:
-                    continue
-                precision = len(match.group(1).split(".", 1)[1]) if "." in match.group(1) else 0
-                candidates.append((precision, value))
+        pattern = rf"{re.escape(label)}[\s\S]{{0,120}}?([+\-]?[0-9]+(?:\.[0-9]+)?)\s*%"
+        for match in re.finditer(pattern, text, flags=re.I):
+            value = _safe_float(match.group(1))
+            if value is None or not -50 <= value <= 80:
+                continue
+            precision = len(match.group(1).split(".", 1)[1]) if "." in match.group(1) else 0
+            candidates.append((precision, value))
     if not candidates:
         return None
-    return sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)[0][1]
+    return sorted(candidates, key=lambda item: (item[0], abs(item[1])), reverse=True)[0][1]
 
 
 def _chinese_streak_weeks(text: str) -> float | None:
     numerals = {
-        "一": 1,
-        "二": 2,
-        "兩": 2,
-        "三": 3,
-        "四": 4,
-        "五": 5,
-        "六": 6,
-        "七": 7,
-        "八": 8,
-        "九": 9,
-        "十": 10,
+        "\u4e00": 1, "\u4e8c": 2, "\u5169": 2, "\u4e24": 2, "\u4e09": 3, "\u56db": 4,
+        "\u4e94": 5, "\u516d": 6, "\u4e03": 7, "\u516b": 8, "\u4e5d": 9, "\u5341": 10,
     }
-    match = re.search(r"連(?:續)?([一二兩三四五六七八九十])(?:週)?(?:上漲|走揚|漲|彈)", text)
+    match = re.search(r"(?:\u9023\u7e8c|\u8fde\u7eed)([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u5169\u4e24])(?:\u9031|\u5468)", text)
     if not match:
         return None
     return float(numerals.get(match.group(1), 0) or 0) or None
@@ -1188,6 +1127,7 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+
 def _maybe_update_scfi_csv_from_search(
     extracted: dict[str, Any],
     current_data: dict[str, Any],
@@ -1195,43 +1135,52 @@ def _maybe_update_scfi_csv_from_search(
 ) -> dict[str, Any]:
     if not extracted:
         return {"updated": False, "note": ""}
-    if _env("SCFI_AUTO_UPDATE_CSV", "true").lower() not in {"1", "true", "yes", "on"}:
-        return {"updated": False, "note": "航線資料自動更新已關閉。"}
+    update_cloud = _env("SCFI_AUTO_UPDATE_CLOUD", "true").lower() in {"1", "true", "yes", "on"}
+    update_local_csv = _env("SCFI_AUTO_UPDATE_LOCAL_CSV", "false").lower() in {"1", "true", "yes", "on"}
+    if not update_cloud and not update_local_csv:
+        return {"updated": False, "note": "\u822a\u7dda\u8cc7\u6599\u81ea\u52d5\u66f4\u65b0\u5df2\u95dc\u9589\uff1b\u672c\u6b21\u53ea\u4f7f\u7528\u5373\u6642\u6293\u53d6\u7d50\u679c\uff0c\u4e0d\u5beb\u5165\u96f2\u7aef\u6216\u672c\u6a5f CSV\u3002"}
 
     row = _csv_row_from_search_extraction(extracted)
     if not row:
-        return {"updated": False, "note": "公開搜尋未取得完整美西、美東、歐洲線數字，未更新航線資料庫。"}
+        return {"updated": False, "note": "\u516c\u958b\u641c\u5c0b\u6c92\u6709\u53d6\u5f97\u5b8c\u6574 SCFI / \u7f8e\u897f / \u7f8e\u6771 / \u6b50\u6d32\u7dda\u6578\u5b57\uff0c\u56e0\u6b64\u4e0d\u66f4\u65b0\u96f2\u7aef\u822a\u7dda\u8cc7\u6599\u5eab\u3002"}
 
     search_date = row.get("date")
     csv_date = (latest_csv_row or {}).get("date") or current_data.get("csv_row_date")
     if not search_date:
-        return {"updated": False, "note": "公開搜尋資料缺少資料日期，未更新航線資料庫。"}
+        return {"updated": False, "note": "\u516c\u958b\u641c\u5c0b\u8cc7\u6599\u7f3a\u5c11\u8cc7\u6599\u65e5\u671f\uff0c\u56e0\u6b64\u4e0d\u66f4\u65b0\u96f2\u7aef\u822a\u7dda\u8cc7\u6599\u5eab\u3002"}
     if csv_date and not (_date_after(search_date, csv_date) or _same_date(search_date, csv_date)):
-        return {"updated": False, "note": f"公開搜尋資料日期 {search_date} 早於既有資料 {csv_date}，未更新航線資料庫。"}
+        return {"updated": False, "note": f"\u516c\u958b\u641c\u5c0b\u8cc7\u6599\u65e5\u671f {search_date} \u65e9\u65bc\u65e2\u6709\u822a\u7dda\u8cc7\u6599 {csv_date}\uff0c\u672a\u66f4\u65b0\u96f2\u7aef\u822a\u7dda\u8cc7\u6599\u5eab\u3002"}
     if _same_date(search_date, csv_date) and latest_csv_row and not _csv_row_materially_changed(row, latest_csv_row):
-        return {"updated": False, "note": f"公開搜尋資料日期 {search_date} 與既有資料相同且數值未變，未更新航線資料庫。"}
+        return {"updated": False, "note": f"\u516c\u958b\u641c\u5c0b\u8cc7\u6599\u65e5\u671f {search_date} \u8207\u65e2\u6709\u822a\u7dda\u8cc7\u6599\u76f8\u540c\uff0c\u4e14\u6578\u503c\u6c92\u6709\u91cd\u5927\u8b8a\u5316\uff0c\u672a\u91cd\u8907\u66f4\u65b0\u3002"}
 
-    csv_written = _write_scfi_csv_row(row)
-    supabase_result = upsert_route_row_to_supabase(row)
+    csv_written = _write_scfi_csv_row(row) if update_local_csv else False
+    supabase_result = upsert_route_row_to_supabase(row) if update_cloud else {"written": False, "note": "SCFI_AUTO_UPDATE_CLOUD is false."}
     supabase_written = bool(supabase_result.get("written"))
-    if not csv_written and not supabase_written:
+    if update_cloud and not supabase_written and update_local_csv and not csv_written:
         return {
             "updated": False,
-            "note": f"航線資料更新失敗：CSV 未寫入；Supabase 未寫入：{supabase_result.get('note')}",
+            "note": f"\u822a\u7dda\u8cc7\u6599\u66f4\u65b0\u5931\u6557\uff1aSupabase \u672a\u5beb\u5165\uff0c\u672c\u6a5f CSV \u4e5f\u672a\u5beb\u5165\u3002Supabase \u8a0a\u606f\uff1a{supabase_result.get('note')}",
         }
+    if update_cloud and not supabase_written and not update_local_csv:
+        return {
+            "updated": False,
+            "note": f"\u96f2\u7aef\u822a\u7dda\u8cc7\u6599\u66f4\u65b0\u5931\u6557\uff1aSupabase \u672a\u5beb\u5165\u3002\u8acb\u78ba\u8a8d SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / UPDATE_SUPABASE\u3002\u8a0a\u606f\uff1a{supabase_result.get('note')}",
+        }
+    if update_local_csv and not csv_written and not update_cloud:
+        return {"updated": False, "note": "\u672c\u6a5f CSV \u66f4\u65b0\u5931\u6557\u3002"}
 
     source = row.get("source") or "auto_updated_from_public_news"
     targets = []
     if csv_written:
-        targets.append("本機 CSV")
+        targets.append("\u672c\u6a5f CSV \u5099\u63f4")
     if supabase_written:
-        targets.append("Supabase freight_routes")
-    action = "更新" if _date_after(search_date, csv_date) else "覆寫同日"
+        targets.append("Supabase freight_routes \u96f2\u7aef\u8cc7\u6599\u5eab")
+    action = "\u66f4\u65b0" if _date_after(search_date, csv_date) else "\u8986\u5beb\u540c\u65e5"
     return {
         "updated": True,
         "date": search_date,
         "source": source,
-        "note": f"{action}航線資料至 {'、'.join(targets)}，資料日期 {search_date}。",
+        "note": f"{action}\u822a\u7dda\u8cc7\u6599\u5230 {'\u3001'.join(targets)}\uff0c\u8cc7\u6599\u65e5\u671f {search_date}\u3002",
         "csv_written": csv_written,
         "supabase_written": supabase_written,
     }
