@@ -84,6 +84,15 @@ async def analyze(request: AnalyzeRequest) -> dict:
     )
 
 
+@app.post("/data-preview")
+async def data_preview(request: AnalyzeRequest) -> dict:
+    return analysis_service.data_preview(
+        request.symbol,
+        request.freight_overrides,
+        request.manual_context,
+    )
+
+
 @app.get("/analysis-history")
 async def analysis_history() -> dict:
     return {"records": analysis_service.history(limit=20)}

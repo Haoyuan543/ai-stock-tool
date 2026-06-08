@@ -38,6 +38,7 @@
             <option value="gpt-5">gpt-5：快速分析</option>
           </select>
         </label>
+        <button id="previewButton" type="button" class="secondary-button">只看資料</button>
         <button id="analyzeButton" type="button">立即分析</button>
       </section>
 
@@ -79,6 +80,11 @@
       <section id="freshnessPanel" class="summary-panel hidden">
         <div class="card-header"><h2>資料新鮮度</h2></div>
         <div id="freshnessOutput" class="summary-output"></div>
+      </section>
+
+      <section id="previewPanel" class="summary-panel hidden">
+        <div class="card-header"><h2>資料預覽：不耗 OpenAI token</h2></div>
+        <div id="previewOutput" class="preview-output"></div>
       </section>
 
       <section class="output-grid">

@@ -19,14 +19,14 @@ EMPTY_EXTRACTION = {
 }
 
 
-def extract_market_intelligence(results: list[dict[str, Any]]) -> dict[str, Any]:
+def extract_market_intelligence(results: list[dict[str, Any]], allow_ai: bool = True) -> dict[str, Any]:
     if not results:
         data = _copy_empty()
         data["evidence_type"]["missing_data"].append("No web search results were available.")
         return data
 
     settings = get_settings()
-    if not settings.openai_api_key:
+    if not allow_ai or not settings.openai_api_key:
         return _rule_based_extract(results)
 
     prompt = _build_prompt(results)

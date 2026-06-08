@@ -166,6 +166,24 @@ Report source labels include:
 
 This is intentional: the tool should show both the conclusion and the evidence timing, so you can tell whether it is using fresh data, stale data, or a fallback.
 
+## Data Preview Mode
+
+Use `POST /data-preview` or the dashboard button `只看資料` to check data before running AI analysis.
+
+This mode does not call OpenAI and does not consume OpenAI tokens. It returns:
+
+- latest or intraday stock price
+- data freshness
+- institutional flows
+- freight and SCFI data
+- market regime
+- WTI / Brent oil price
+- international events from RSS/search fallback
+- data quality and truthfulness score
+- source timestamps
+
+Freight preview mode also disables OpenAI-assisted DOM extraction and screenshot extraction. It can still use public API/RSS/HTML/DOM local parsing, CSV, Supabase, and cache. If a field requires AI extraction, it will stay limited or missing in preview mode; run full AI analysis only after the raw data looks usable.
+
 ## Web Search Intelligence Layer
 
 When a primary API cannot provide a field, the backend now uses:

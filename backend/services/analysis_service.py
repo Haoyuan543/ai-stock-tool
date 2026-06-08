@@ -4728,3 +4728,123 @@ def _ensure_source_timestamp_section(self: AnalysisService, report: str, payload
 
 
 AnalysisService._ensure_source_timestamp_section = _ensure_source_timestamp_section
+
+
+def _data_preview(
+    self: AnalysisService,
+    symbol: str,
+    freight_overrides: dict[str, Any] | None = None,
+    manual_context: str = "",
+) -> dict[str, Any]:
+    started = datetime.now(TZ)
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = {
+            "stock": executor.submit(fetch_stock_data, symbol),
+            "institutional": executor.submit(fetch_institutional_data, symbol),
+            "freight": executor.submit(fetch_freight_data, symbol, freight_overrides or {}, False),
+            "news": executor.submit(fetch_news_data, symbol),
+            "fundamentals": executor.submit(fetch_fundamental_data, symbol),
+            "announcements": executor.submit(fetch_announcement_data, symbol),
+        }
+        stock = futures["stock"].result()
+        institutional = futures["institutional"].result()
+        freight = futures["freight"].result()
+        news = futures["news"].result()
+        fundamentals = futures["fundamentals"].result()
+        announcements = futures["announcements"].result()
+
+    market_data = {
+        "stock": stock.get("data", {}),
+        "institutional": institutional.get("data", {}),
+        "freight": freight.get("data", {}),
+        "news": news.get("data", {}),
+        "fundamentals": fundamentals.get("data", {}),
+        "announcements": announcements.get("data", {}),
+        "manual_context": manual_context,
+    }
+    market_data["news_relevance"] = filter_relevant_news(market_data["news"])
+    market_data["freight"]["intelligence"] = build_freight_intelligence(market_data["freight"], market_data["news"])
+    market_data["freight_intelligence"] = market_data["freight"]["intelligence"]
+    market_data["etf_flow"] = build_etf_flow(symbol, market_data["news_relevance"])
+    market_data["red_sea"] = build_red_sea_intelligence(market_data["news"])
+    market_data["red_sea_intelligence"] = market_data["red_sea"]
+    market_data["announcement_intelligence"] = build_announcement_intelligence(symbol, market_data["announcements"], manual_context)
+    market_data["market_regime"] = build_market_regime(market_data["stock"])
+    market_data["international_events"] = build_international_events()
+    market_data["fill_dividend_probability"] = estimate_fill_dividend_probability(
+        market_data["fundamentals"],
+        market_data["stock"],
+        market_data["freight"],
+        market_data["institutional"],
+        market_data["etf_flow"],
+        market_data["market_regime"],
+    )
+
+    data_status = {
+        "stock": stock.get("status", "missing"),
+        "institutional": institutional.get("status", "missing"),
+        "freight": freight.get("status", "missing"),
+        "news": news.get("status", "missing"),
+        "fundamental": fundamentals.get("status", "missing"),
+        "announcements": announcements.get("status", "missing"),
+    }
+    sources = self._merge_sources(stock, institutional, freight, news, fundamentals, announcements)
+    sources = self._merge_engine_sources(sources, market_data)
+    missing = self._merge_missing(stock, institutional, freight, news, fundamentals, announcements)
+    missing.extend(self._engine_missing(market_data))
+    missing = self._soften_resolved_missing(missing, market_data)
+    freshness = self._data_freshness(market_data["stock"])
+    if freshness.get("warning"):
+        missing.append(f"Data Warning: {freshness['warning']}")
+
+    payload = {
+        "symbol": symbol,
+        "mode": "data_preview",
+        "timestamp": started.isoformat(),
+        "market_data": market_data,
+        "data_status": data_status,
+        "data_freshness": freshness,
+        "sources": sources,
+        "missing": self._dedupe_strings(missing),
+    }
+    scores = self._score(payload)
+    payload["local_scores"] = scores
+    data_quality = build_data_quality(payload, scores)
+    truthfulness = build_truthfulness(payload, data_quality)
+    scores = self._apply_truthfulness(scores, payload, truthfulness)
+    payload["local_scores"] = scores
+    data_quality = build_data_quality(payload, scores)
+    truthfulness = build_truthfulness(payload, data_quality)
+    gap_report = build_gap_report(payload, data_quality)
+    position_advice = self._general_position_advice()
+    action_plan = self._action_plan("general", market_data, scores, position_advice)
+    summary = self._summary(symbol, market_data, scores, freshness, "general", position_advice, action_plan, "data_preview", truthfulness)
+    ended = datetime.now(TZ)
+    clean_warnings = [self._user_message(item) for item in payload["missing"]]
+    return {
+        "symbol": symbol,
+        "mode": "data_preview",
+        "timestamp": started.isoformat(),
+        "completed_at": ended.isoformat(),
+        "elapsed_seconds": round((ended - started).total_seconds(), 2),
+        "token_usage": "no_openai_call",
+        "openai_used": False,
+        "data_status": data_status,
+        "data_freshness": freshness,
+        "market_data": market_data,
+        "summary": summary,
+        "data_quality": data_quality,
+        "truthfulness": truthfulness,
+        "gap_report": gap_report,
+        "action_plan": action_plan,
+        "missing_reasons": self._missing_reasons(data_status, clean_warnings),
+        "sources": sources,
+        "source_timestamps": source_summary_lines(sources, limit=36),
+        "warnings": clean_warnings,
+        "data_missing": [item for item in clean_warnings if item.startswith("資料不足") or item.startswith("Data Missing")],
+        "data_limitations": [item for item in clean_warnings if item.startswith("資料提醒") or item.startswith("資料限制") or item.startswith("Data Limitation")],
+        "local_scores": scores,
+    }
+
+
+AnalysisService.data_preview = _data_preview

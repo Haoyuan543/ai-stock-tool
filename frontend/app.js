@@ -1,6 +1,7 @@
 const statusEl = document.querySelector("#apiStatus");
 const noticeEl = document.querySelector("#modeNotice");
 const analyzeButton = document.querySelector("#analyzeButton");
+const previewButton = document.querySelector("#previewButton");
 const loadingBox = document.querySelector("#loadingBox");
 const elapsedTimer = document.querySelector("#elapsedTimer");
 const reportOutput = document.querySelector("#reportOutput");
@@ -14,6 +15,8 @@ const summaryPanel = document.querySelector("#summaryPanel");
 const summaryOutput = document.querySelector("#summaryOutput");
 const freshnessPanel = document.querySelector("#freshnessPanel");
 const freshnessOutput = document.querySelector("#freshnessOutput");
+const previewPanel = document.querySelector("#previewPanel");
+const previewOutput = document.querySelector("#previewOutput");
 const downloadHtmlButton = document.querySelector("#downloadHtmlButton");
 
 let latestReport = "";
@@ -26,6 +29,7 @@ document.querySelector("#copyButton").addEventListener("click", async () => {
 });
 downloadHtmlButton.addEventListener("click", downloadHtmlReport);
 analyzeButton.addEventListener("click", analyzeNow);
+previewButton.addEventListener("click", previewData);
 
 checkHealth();
 loadModels();
@@ -111,6 +115,44 @@ async function analyzeNow() {
   }
 }
 
+async function previewData() {
+  const symbol = document.querySelector("#symbolInput").value.trim() || "2603.TW";
+  const manualContext = document.querySelector("#manualContext").value.trim();
+
+  setLoading(true, "資料檢查中...");
+  try {
+    const res = await fetch("/data-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol,
+        mode: "general",
+        freight_overrides: readFreightOverrides(),
+        manual_context: manualContext
+      })
+    });
+    if (!res.ok) throw new Error(await res.text());
+
+    const json = await res.json();
+    latestResult = json;
+    renderStatuses(json.data_status || {});
+    renderSummary(json.summary || null, json.action_plan || null, json.elapsed_seconds, "未呼叫 OpenAI", json.truthfulness || null);
+    renderFreshness(json.data_freshness || {});
+    renderPreview(json);
+    renderList(missingList, json.data_missing || [], "無重大資料缺漏。");
+    renderList(limitationsList, json.data_limitations || [], "無重大資料限制。");
+    renderDataQuality(json.data_quality || null, json.truthfulness || null);
+    renderMissingReasons(json.missing_reasons || []);
+    renderSources(json.sources || []);
+    statusEl.textContent = "API online | 資料預覽完成 | OpenAI 未呼叫";
+    showNotice("資料預覽完成：這次只抓資料與來源時間戳，沒有呼叫 OpenAI，不會消耗 OpenAI token。", "ok");
+  } catch (error) {
+    showNotice(`資料預覽失敗：${error.message}`, "missing");
+  } finally {
+    setLoading(false);
+  }
+}
+
 function readFreightOverrides() {
   const ids = {
     scfi_latest: "scfiLatest",
@@ -190,6 +232,87 @@ function renderSummary(summary, actionPlan, elapsedSeconds, modelUsed, truthfuln
   summaryPanel.classList.remove("hidden");
 }
 
+function renderPreview(result) {
+  const market = result.market_data || {};
+  const stock = market.stock || {};
+  const freight = market.freight || {};
+  const intl = market.international_events || {};
+  const oil = intl.oil_prices || {};
+  const regime = market.market_regime || {};
+  const sourceRows = (result.source_timestamps || []).slice(0, 12);
+  const eventRows = (intl.events || []).slice(0, 8);
+  previewOutput.innerHTML = `
+    <div class="preview-note">
+      <strong>OpenAI 狀態：</strong>${result.openai_used ? "有呼叫" : "未呼叫"}　
+      <strong>Token：</strong>${escapeHtml(result.token_usage || "no_openai_call")}　
+      <strong>耗時：</strong>${escapeHtml(result.elapsed_seconds || "--")} 秒
+    </div>
+    <div class="preview-grid">
+      <section>
+        <h3>股價與新鮮度</h3>
+        ${simpleTable([
+          ["目前價格", stock.close],
+          ["資料日期", stock.latest_date],
+          ["即時資料", stock.is_realtime_price ? "是" : "否"],
+          ["即時來源", stock.realtime_source || stock.primary_price_source],
+          ["即時時間", stock.realtime_time],
+          ["成交量", stock.volume],
+          ["20 日均線", stock.ma20],
+          ["RSI14", stock.technical?.rsi14]
+        ])}
+      </section>
+      <section>
+        <h3>SCFI 與航線</h3>
+        ${simpleTable([
+          ["SCFI 綜合指數", freight.scfi_latest],
+          ["SCFI 週變化", formatPct(freight.weekly_change)],
+          ["連續週數", freight.scfi_streak_weeks],
+          ["美西線", freight.us_west],
+          ["美西週變化", formatPct(freight.us_west_weekly_change)],
+          ["美東線", freight.us_east],
+          ["美東週變化", formatPct(freight.us_east_weekly_change)],
+          ["歐洲線", freight.europe],
+          ["歐洲週變化", formatPct(freight.europe_weekly_change)],
+          ["航線資料來源", freight.route_storage_label || freight.verified_route_source]
+        ])}
+      </section>
+      <section>
+        <h3>國際事件與油價</h3>
+        ${simpleTable([
+          ["整體風險", intl.overall_risk],
+          ["信心分數", intl.confidence],
+          ["WTI 日期", oil.wti?.date],
+          ["WTI 價格", oil.wti?.close],
+          ["WTI 5 日變化", formatPct(oil.wti?.change_5d_pct)],
+          ["Brent 日期", oil.brent?.date],
+          ["Brent 價格", oil.brent?.close],
+          ["Brent 5 日變化", formatPct(oil.brent?.change_5d_pct)],
+          ["市場環境", regime.market_regime],
+          ["美股狀態", regime.us_market]
+        ])}
+      </section>
+      <section>
+        <h3>資料品質</h3>
+        ${simpleTable([
+          ["資料覆蓋率", result.local_scores?.revised_score?.data_coverage ?? result.local_scores?.data_coverage],
+          ["真實性分數", result.truthfulness?.truthfulness_score],
+          ["缺漏數", (result.data_missing || []).length],
+          ["限制數", (result.data_limitations || []).length]
+        ])}
+      </section>
+    </div>
+    <section class="preview-list">
+      <h3>國際事件摘要</h3>
+      <ul>${eventRows.length ? eventRows.map((item) => `<li><strong>${escapeHtml(item.published_at || "時間不足")}</strong>｜${escapeHtml(item.title || "")}<br><span>${escapeHtml(item.source || "")}</span></li>`).join("") : "<li>目前沒有事件資料。</li>"}</ul>
+    </section>
+    <section class="preview-list">
+      <h3>來源時間戳</h3>
+      <ul>${sourceRows.length ? sourceRows.map((line) => `<li>${escapeHtml(line.replace(/^-\\s*/, ""))}</li>`).join("") : "<li>來源時間戳不足。</li>"}</ul>
+    </section>
+  `;
+  previewPanel.classList.remove("hidden");
+}
+
 async function loadHistory() {
   try {
     const res = await fetch("/analysis-history");
@@ -239,9 +362,10 @@ function renderDataQuality(quality, truthfulness) {
   `).join("");
 }
 
-function setLoading(isLoading) {
+function setLoading(isLoading, label = "分析中...") {
   analyzeButton.disabled = isLoading;
-  analyzeButton.textContent = isLoading ? "分析中..." : "立即分析";
+  previewButton.disabled = isLoading;
+  analyzeButton.textContent = isLoading ? label : "立即分析";
   loadingBox.classList.toggle("hidden", !isLoading);
   if (isLoading) {
     startedAt = performance.now();
@@ -443,6 +567,23 @@ function buildStandaloneHtml(symbol, timestamp) {
   </main>
 </body>
 </html>`;
+}
+
+function simpleTable(rows) {
+  const body = rows.map(([label, value]) => `
+    <tr>
+      <th>${escapeHtml(label)}</th>
+      <td>${escapeHtml(value === undefined || value === null || value === "" ? "資料不足" : value)}</td>
+    </tr>
+  `).join("");
+  return `<div class="table-wrap compact-table"><table><tbody>${body}</tbody></table></div>`;
+}
+
+function formatPct(value) {
+  if (value === undefined || value === null || value === "") return "資料不足";
+  const number = Number(value);
+  if (Number.isNaN(number)) return value;
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
 }
 
 function escapeHtml(value) {

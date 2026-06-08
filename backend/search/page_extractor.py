@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXTRACT_DIR = ROOT / "data" / "page_extracts"
 
 
-def extract_pages_with_browser(results: list[dict[str, Any]], max_pages: int = 1) -> dict[str, Any]:
+def extract_pages_with_browser(results: list[dict[str, Any]], max_pages: int = 1, allow_ai: bool = True) -> dict[str, Any]:
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -85,17 +85,17 @@ def extract_pages_with_browser(results: list[dict[str, Any]], max_pages: int = 1
                     pass
         browser.close()
 
-    extracted = extract_from_page_records(pages)
+    extracted = extract_from_page_records(pages, allow_ai=allow_ai)
     missing.extend(extracted.get("missing", []))
     return {"extracted": extracted.get("data"), "pages": _metadata_only(pages), "missing": missing}
 
 
-def extract_from_page_records(pages: list[dict[str, Any]]) -> dict[str, Any]:
+def extract_from_page_records(pages: list[dict[str, Any]], allow_ai: bool = True) -> dict[str, Any]:
     if not pages:
         return {"data": None, "missing": ["Data Limitation: no page DOM/network records were captured."]}
     local = _local_extract_from_pages(pages)
     settings = get_settings()
-    if not settings.openai_api_key:
+    if not allow_ai or not settings.openai_api_key:
         return {"data": local, "missing": ["Data Limitation: OPENAI_API_KEY is unavailable for DOM/network AI extraction; local extraction was used."]}
 
     compact_pages = [

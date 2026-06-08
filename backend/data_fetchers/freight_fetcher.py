@@ -39,7 +39,7 @@ class FreightFetcher:
         return _load_scfi_csv()
 
 
-def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dict[str, Any]:
+def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None, allow_ai_extraction: bool = True) -> dict[str, Any]:
     settings = get_settings()
     source = {"name": "Shanghai Shipping Exchange SCFI", "url": "https://www.sse.net.cn/indexIntro?indexName=scfi"}
     single_index_source = {"name": "SSE SCFI single index official table", "url": SSE_SCFI_SINGLE_INDEX}
@@ -121,7 +121,7 @@ def fetch_freight_data(symbol: str, manual: dict[str, Any] | None = None) -> dic
             data.update({key: value for key, value in cleaned.items() if value is not None})
             data["note"] = "Manual freight supplement was used for missing route data."
     if _needs_search_fallback(data):
-        search = _freight_search_fallback(symbol)
+        search = _freight_search_fallback(symbol, allow_ai_extraction=allow_ai_extraction)
         sources.extend(search.get("sources", []))
         missing.extend(search.get("missing", []))
         data["page_extracts"] = search.get("page_extracts", [])
@@ -550,7 +550,7 @@ def _write_scfi_csv_row(row: dict[str, str]) -> bool:
         rows = [existing for existing in rows if existing.get("date") != row.get("date")]
         rows.append({key: row.get(key, "") for key in fieldnames})
         rows = sorted(rows, key=lambda item: item.get("date") or "")
-        with SCFI_CSV.open("w", encoding="utf-8-sig", newline="") as handle:
+        with SCFI_CSV.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
@@ -661,22 +661,22 @@ def _last_three_numbers(cells: list[str]) -> tuple[float | None, float | None, f
     return values[-3], values[-2], values[-1]
 
 
-def _freight_search_fallback(symbol: str) -> dict[str, Any]:
+def _freight_search_fallback(symbol: str, allow_ai_extraction: bool = True) -> dict[str, Any]:
     search = web_search(freight_queries(symbol), max_results_per_query=5)
-    extracted = extract_market_intelligence(search.get("results", []))
+    extracted = extract_market_intelligence(search.get("results", []), allow_ai=allow_ai_extraction)
     news_numbers = _extract_scfi_numbers_from_news(search.get("results", []))
     if news_numbers:
         extracted = merge_extractions(extracted, news_numbers)
     page_extract = None
     if _extraction_needs_page_extract(extracted):
-        page_extract = extract_pages_with_browser(search.get("results", []), max_pages=3)
+        page_extract = extract_pages_with_browser(search.get("results", []), max_pages=3, allow_ai=allow_ai_extraction)
         page_numbers = _extract_scfi_numbers_from_pages((page_extract or {}).get("pages", []))
         if page_numbers:
             extracted = merge_extractions(extracted, page_numbers)
         if page_extract.get("extracted"):
             extracted = merge_extractions(extracted, page_extract["extracted"])
     screenshot = None
-    if _extraction_needs_screenshots(extracted):
+    if allow_ai_extraction and _extraction_needs_screenshots(extracted):
         screenshot = analyze_search_result_screenshots(search.get("results", []), max_pages=3)
         if screenshot.get("extracted"):
             extracted = merge_extractions(extracted, screenshot["extracted"])
